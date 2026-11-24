@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Gomaa Relay</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      Gomaa Relay
+      <span class="badge">Mo · Gomaa</span>
+      <span class="badge">#No Api Cost</span>
+      <div class="led-cluster" title="System Health & Self-Heal Status">
+        <span id="greenLed" class="led green on" title="Healthy / Auto-Relay Active"></span>
+        <button id="redLed" class="led red" title="No failures" onclick="App.openErrorModal()">
+          <span class="led-dot"></span>
+          <span id="redLedLabel" class="led-label hidden">View Error Log</span>
+        </button>
+      </div>
+      <span id="goalBadge" class="badge goal">Goal: Step 1 (IDLE)</span>
+    </div>
+    <div class="project-bar">
+      <input id="projPath" value="{{ project_root }}" placeholder="C:\path\to\your\project" onchange="App.setProject()">
+      <button class="btn ghost" onclick="App.openBrowser()">Browse</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar card" style="display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 92px); overflow-y: auto;">
+      <div class="card-head" style="flex-shrink: 0;">
+        <div class="row" style="gap:4px;">
+          <h3>Project Files</h3>
+          <button class="btn ghost" style="padding:2px 6px; font-size:11px;" title="Smart Select with Brain" onclick="App.smartSelect()">🧠</button>
+          <button class="btn ghost" style="padding:2px 6px; font-size:11px;" title="Refresh Project Files" onclick="App.loadFiles()">🔄</button>
+          <button class="btn ghost" style="padding:2px 6px; font-size:11px;" title="New File in Root" onclick="App.createNewItem('', false)">📄+</button>
+          <button class="btn ghost" style="padding:2px 6px; font-size:11px;" title="New Folder in Root" onclick="App.createNewItem('', true)">📁+</button>
+          <button class="btn ghost" id="gitIgnoreToggleBtn" style="padding:2px 6px; font-size:11px;" title="Toggle .gitignore files visibility" onclick="App.toggleIgnored()">👁️</button>
+        </div>
+        <span id="fileStats" class="muted">0 selected</span>
+      </div>
+      <div class="row" style="flex-shrink: 0;">
+        <input id="filter" placeholder="Filter files... (type @ for mention)" oninput="App.renderFiles()" onkeyup="App.handleFilterKey(event)">
+      </div>
+      <div id="fileList" class="file-list" style="flex: 1; min-height: 160px;"></div>
+      <div class="token-meter" style="flex-shrink: 0;">
+        <span>Selected Context:</span>
+        <strong id="selectedTokens">0 tokens</strong>
+      </div>
+
+      <div id="planPanel" class="col hidden" style="flex-shrink: 0; border-top: 1px solid var(--border); padding-top: 10px;">
+        <div class="card-head">
+          <h3 style="font-size: 13px; color: #93c5fd;">AI Implementation Plan</h3>
+          <span id="planMeta" class="muted" style="font-size: 11px;">0 tasks</span>
+        </div>
+        <div id="planOut" class="plan-body" style="max-height: 200px; overflow-y: auto; background: var(--panel); padding: 8px; border-radius: 6px; border: 1px solid var(--border);"></div>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div id="inlinePopup" class="inline-popup info">
+        <div class="inline-popup-content">
+          <span id="inlinePopupIcon" class="popup-icon">&#9432;</span>
+          <div class="inline-popup-text">
+            <strong id="inlinePopupTitle">Autonomous Relay Ready</strong>
+            <div id="inlinePopupMsg" class="muted">Type your goal below — line ranges auto-select and prompt auto-copies to clipboard.</div>
+          </div>
+        </div>
+        <div id="inlinePopupActions" class="row wrap"></div>
+      </div>
+
+      <div id="stagePromptCard" class="card">
+        <div class="card-head">
+          <h3>1. Goal (Press Enter to Send)</h3>
+          <div class="row wrap">
+            <span id="promptMeta" class="muted"></span>
+            <button class="btn primary" onclick="App.buildPrompt(false)">Send Goal &rarr;</button>
+            <button class="btn ghost" onclick="App.openOptionsModal()">&#9881;</button>
+          </div>
+        </div>
+        <div id="selectedChips" class="chips"></div>
+        <textarea id="task" placeholder="Type your goal... Press Enter when ready."></textarea>
+      </div>
+
+      <div id="stagePasteCard" class="card hidden">
+        <div class="card-head">
+          <h3>2. AI Response Relay</h3>
+          <div class="row wrap">
+            <div id="copyButtons" class="row"></div>
+            <span id="applyMeta" class="muted"></span>
+          </div>
+        </div>
+        <div id="promptPreviewWrap" class="hidden">
+          <textarea id="generatedPrompt" class="mono small" readonly></textarea>
+        </div>
+        <div id="pasteInputArea" class="col hidden">
+          <input id="fallbackFile" class="hidden">
+          <textarea id="aiResponse" class="mono" placeholder="Waiting for AI response on clipboard..."></textarea>
+        </div>
+        <div id="questionsOut" class="qa-container"></div>
+        <div id="diffOut" class="diff-container"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="browserModal" class="modal hidden">
+    <div class="modal-card" style="width: min(640px, 95vw);">
+      <div class="card-head">
+        <h3>Advanced Windows Folder Browser</h3>
+        <button class="btn ghost" onclick="App.closeBrowser()">Close</button>
+      </div>
+      <div id="driveBar" class="row wrap"></div>
+      <div class="row">
+        <button id="upBtn" class="btn ghost" onclick="App.browseUp()" title="Go to Parent Folder">&uarr; Up</button>
+        <input id="browsePath" placeholder="Enter path (e.g. C:\Projects) &amp; press Enter..." onkeydown="if(event.key==='Enter') App.browseTo(this.value)">
+        <button class="btn primary" onclick="App.browseTo(document.getElementById('browsePath').value)">Go</button>
+      </div>
+      <div id="dirList" class="file-list" style="max-height: 340px;"></div>
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <span class="muted" id="browserMeta">Select any folder to set as root</span>
+        <button class="btn success" onclick="App.selectBrowsed()">Select This Folder</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="editorModal" class="modal hidden">
+    <div class="modal-card editor-modal-card">
+      <div class="card-head">
+        <div class="row">
+          <h3 id="editorTitle">file.py</h3>
+          <span id="editorLangBadge" class="badge">CODE</span>
+        </div>
+        <div class="row">
+          <button class="btn success" onclick="App.saveEditor()">Save File</button>
+          <button class="btn ghost" onclick="App.closeEditor()">Close</button>
+        </div>
+      </div>
+      <div class="editor-wrap">
+        <pre id="editorLines" class="editor-gutter">1</pre>
+        <textarea id="editorCode" class="editor-textarea" spellcheck="false" oninput="App.syncEditorGutter()" onscroll="App.syncEditorScroll()"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <div id="choiceModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="card-head">
+        <h3 id="choiceModalTitle">Choose an Option</h3>
+        <button class="btn ghost" onclick="App.closeChoiceModal()">Close</button>
+      </div>
+      <div id="choiceModalDesc" class="muted"></div>
+      <div id="choiceModalBody" class="col"></div>
+    </div>
+  </div>
+
+  <div id="errorModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="card-head">
+        <h3>Self-Heal &amp; Error Diagnostic Log</h3>
+        <button class="btn ghost" onclick="App.closeErrorModal()">Close</button>
+      </div>
+      <div id="errorLogContent" class="diff-container" style="max-height: 320px;"></div>
+    </div>
+  </div>
+
+  <div id="contextMenu" class="context-menu hidden">
+    <div class="ctx-item" onclick="App.ctxNewFile()">📄 New File Here</div>
+    <div class="ctx-item" onclick="App.ctxNewFolder()">📁 New Folder Here</div>
+    <div class="ctx-item" onclick="App.ctxCopy()">📋 Copy</div>
+    <div class="ctx-item" onclick="App.ctxCut()">✂️ Cut</div>
+    <div class="ctx-item" id="ctxPasteItem" onclick="App.ctxPaste()" style="display:none;">📥 Paste Here</div>
+    <div class="ctx-item" onclick="App.ctxRename()">✏️ Rename</div>
+    <div class="ctx-item danger" onclick="App.ctxDelete()">🗑️ Delete</div>
+  </div>
+
+  <div id="optionsModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="card-head">
+        <h3>Prompt &amp; Automation Settings</h3>
+        <button class="btn success" onclick="App.closeOptionsModal()">Done</button>
+      </div>
+      <div class="col">
+        <label class="chk"><input type="checkbox" id="includeTree" checked> Include project file tree in prompt</label>
+        <label class="chk"><input type="checkbox" id="autoUnselect" checked> Auto-unselect files after copying prompt</label>
+        <label class="chk"><input type="checkbox" id="autoSelectSmart" checked> Auto-pick relevant files while typing goal</label>
+        <div class="row">
+          <span class="muted">Chunk size (chars):</span>
+          <input id="chunkSize" type="number" value="120000" class="num-input">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
