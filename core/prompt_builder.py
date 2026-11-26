@@ -190,6 +190,10 @@ class PromptBuilder:
         full_prompt = "\n\n".join(sections)
 
         chunks = self._split_on_lines(full_prompt, effective_chunk)
+        if len(chunks) > 1:
+            # Reserve room so the prepended "[PART i/n ...]" header still fits
+            # within the mode's chunk budget.
+            chunks = self._split_on_lines(full_prompt, max(1, effective_chunk - 128))
         if len(chunks) == 1:
             parts = chunks
         else:
