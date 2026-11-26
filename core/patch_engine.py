@@ -160,9 +160,19 @@ class PatchEngine:
         backups: list[BackupEntry] = []
 
         for op in ops:
-            rel = op["path"]
+            if not isinstance(op, dict):
+                results.append({"path": "-", "status": "error", "message": "Invalid operation (not an object)."})
+                continue
+            rel = op.get("path")
+            if not isinstance(rel, str) or not rel.strip():
+                results.append({"path": str(rel) if rel is not None else "-", "status": "error", "message": "Operation is missing a valid path."})
+                continue
+            op_type = op.get("type")
+            if op_type not in ("edit", "write"):
+                results.append({"path": rel, "status": "error", "message": f"Unknown operation type: {op_type!r}."})
+                continue
             try:
-                if op["type"] == "edit":
+                if op_type == "edit":
                     old_full = self._fm.read_raw(rel)
                     use_crlf = "\r\n" in old_full
                     norm_full = old_full.replace("\r\n", "\n")
@@ -184,7 +194,7 @@ class PatchEngine:
 
                     new_full = self._preserve_newlines(replaced, use_crlf)
 
-                elif op["type"] == "write":
+                elif op_type == "write":
                     try:
                         old_full = self._fm.read_raw(rel)
                         use_crlf = "\r\n" in old_full

@@ -66,3 +66,46 @@ def test_undo_with_nothing_to_restore(client):
     res = client.post("/api/undo")
     assert res.status_code == 400
     assert res.get_json()["error"] == "Nothing to undo."
+
+
+def test_build_prompt_rejects_bad_chunk_size(client):
+    res = client.post("/api/build_prompt", json={"task": "t", "chunk_size": "abc"})
+    assert res.status_code == 400
+    res2 = client.post("/api/build_prompt", json={"task": "t", "chunk_size": 0})
+    assert res2.status_code == 400
+
+
+def test_build_prompt_rejects_non_object_body(client):
+    res = client.post("/api/build_prompt", data="[1,2,3]", content_type="application/json")
+    assert res.status_code == 400
+
+
+def test_apply_rejects_non_object_body(client):
+    res = client.post("/api/apply", data="[1,2,3]", content_type="application/json")
+    assert res.status_code == 400
+
+
+def test_apply_false_string_does_not_apply(client, fm):
+    original = fm.read_raw("a.py")
+    reply = '<<<EDIT path="a.py">>>\n<<<OLD>>>\ndef alpha():\n    return 1\n<<<NEW>>>\ndef alpha():\n    return 9\n<<<END>>>\n<<<STATUS: DONE>>>'
+    res = client.post("/api/apply", json={"text": reply, "apply": "false"})
+    assert res.status_code == 200
+    assert fm.read_raw("a.py") == original
+
+
+def test_delete_root_rejected(client):
+    res = client.post("/api/file/delete", json={"path": ""})
+    assert res.status_code == 400
+
+
+def test_rename_root_rejected(client):
+    res = client.post("/api/file/rename", json={"old_path": "", "new_path": "x.py"})
+    assert res.status_code == 400
+
+
+def test_protected_paths_rejected(client):
+    for path in (".chatbridge_undo/x.json", ".git/config"):
+        r = client.get(f"/api/file?path={path}")
+        assert r.status_code == 400
+        r2 = client.post("/api/file", json={"path": path, "content": "x"})
+        assert r2.status_code == 400

@@ -114,3 +114,13 @@ def test_file_and_outline_headers(pb):
 def test_copilot_adds_json_mode_note(pb):
     result = pb.build("task", [], include_tree=False, mode="copilot")
     assert "MODE NOTE (Copilot)" in result["full_prompt"]
+
+
+def test_build_handles_invalid_file_specs(pb):
+    result = pb.build("task", [None, {"foo": "bar"}, {"path": "a.py", "start": "abc", "end": 2}], include_tree=False)
+    assert "=== FILE: a.py ===" in result["full_prompt"] or "=== FILE: a.py (lines" in result["full_prompt"]
+
+
+def test_build_handles_non_list_inputs(pb):
+    result = pb.build("task", None, include_tree=False, answers="x", applied_log=5, mode="nope")
+    assert result["mode"] == "gemini"

@@ -1383,6 +1383,15 @@ const App = {
     backdrop.innerHTML = this.highlightCode(text, ext);
   },
 
+  escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  },
+
   highlightCode(code, ext) {
     const safe = this.escapeHtml(code);
     if (ext === "py") {
@@ -1470,6 +1479,23 @@ const App = {
         }
       }
     });
+
+    const autoSmart = document.getElementById("autoSelectSmart");
+    let smartTimer = null;
+    if (autoSmart) {
+      taskBox.addEventListener("input", () => {
+        if (!autoSmart.checked || this.goalFinished) return;
+        if (taskBox.value.trim().length < 8) return;
+        if (this.selected.size > 0) return;
+        clearTimeout(smartTimer);
+        smartTimer = setTimeout(() => {
+          if (autoSmart.checked) this.smartSelect();
+        }, 700);
+      });
+      autoSmart.addEventListener("change", () => {
+        if (!autoSmart.checked) clearTimeout(smartTimer);
+      });
+    }
 
     const editorArea = document.getElementById("editorCode");
     editorArea.addEventListener("keydown", (e) => {

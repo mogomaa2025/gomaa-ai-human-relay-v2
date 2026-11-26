@@ -148,3 +148,18 @@ def test_dead_api_removed(pe):
     assert not hasattr(PatchEngine, "_strip_wrappers")
     params = list(inspect.signature(pe.parse_response).parameters)
     assert params == ["response_text"]
+
+
+def test_execute_handles_malformed_ops(pe, fm):
+    before = fm.read_raw("a.py")
+    ops = [{"type": "edit"}, {"path": 123}, {"type": "bogus", "path": "a.py"}, "not-a-dict"]
+    results = pe.execute(ops, apply_changes=True)
+    assert len(results) == 4
+    assert all(r["status"] == "error" for r in results)
+    assert fm.read_raw("a.py") == before
+
+
+def test_execute_rejects_op_without_path(pe, fm):
+    results = pe.execute([{"type": "write", "content": "x"}], apply_changes=True)
+    assert results[0]["status"] == "error"
+    assert "path" in results[0]["message"].lower()

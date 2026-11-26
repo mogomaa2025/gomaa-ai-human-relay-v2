@@ -133,10 +133,19 @@ class PromptBuilder:
         applied_log: list[str] | None = None,
         mode: str = DEFAULT_MODE,
     ) -> dict:
-        mode_key = (mode or "").strip().lower()
+        mode_key = (mode or "").strip().lower() if isinstance(mode, str) else ""
         if mode_key not in MODES:
             mode_key = DEFAULT_MODE
         cfg = get_mode(mode_key)
+
+        if not isinstance(task, str):
+            task = "" if task is None else str(task)
+        if not isinstance(file_specs, list):
+            file_specs = []
+        if not isinstance(answers, list):
+            answers = []
+        if not isinstance(applied_log, list):
+            applied_log = []
 
         if chunk_size is None:
             effective_chunk = cfg["chunk_chars"]
@@ -147,19 +156,42 @@ class PromptBuilder:
         sections: list[str] = []
 
         if include_tree:
-            scanned_items = self._fm.scan_files(limit=250)
+            tree_limit = getattr(self._fm, "TREE_LIMIT", 250)
+            scanned_items = self._fm.scan_files(limit=tree_limit)
             tree_entries = [f"{item['path']} ({item.get('lines', 0)} lines)" for item in scanned_items]
+            truncation_note = ""
+            if len(scanned_items) >= tree_limit:
+                truncation_note = f"\n... (tree truncated to first {tree_limit} files; use scan with include_ignored if needed)"
             sections.append(
                 "TREE (with exact line counts):\n" +
                 "\n".join(tree_entries) +
+                truncation_note +
                 "\n\nINSTRUCTION NOTICE: Be token-efficient. Do NOT request full files unless absolutely necessary. Inspect the line counts above and request specific line ranges (e.g., core/prompt_builder.py:50-150) using <<<NEED_FILES>>> when examining or editing large files."
             )
 
+        def _to_int(value):
+            if value in (None, ""):
+                return None
+            if isinstance(value, bool):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
         for spec in file_specs:
-            rel = spec["path"]
+            if not isinstance(spec, dict):
+                sections.append("=== FILE: (invalid spec) ===")
+                continue
+            rel = spec.get("path")
+            if not isinstance(rel, str) or not rel.strip():
+                sections.append("=== FILE: (missing path) ===")
+                continue
             spec_mode = spec.get("mode", "full")
-            start = spec.get("start")
-            end = spec.get("end")
+            if not isinstance(spec_mode, str):
+                spec_mode = "full"
+            start = _to_int(spec.get("start"))
+            end = _to_int(spec.get("end"))
             try:
                 if spec_mode == "range" and (start or end):
                     text, total = self._fm.read_text(rel, start, end)

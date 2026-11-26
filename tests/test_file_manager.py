@@ -77,3 +77,84 @@ def test_set_root_validates_directory(fm, tmp_path):
     target.mkdir()
     assert fm.set_root(str(target)) == target.resolve()
     assert fm.root == target.resolve()
+
+
+def test_safe_path_rejects_empty_and_root(fm):
+    with pytest.raises(ValueError):
+        fm.safe_path("")
+    with pytest.raises(ValueError):
+        fm.safe_path("   ")
+    with pytest.raises(ValueError):
+        fm.safe_path(".")
+
+
+def test_safe_path_rejects_protected_dirs(fm):
+    with pytest.raises(ValueError):
+        fm.safe_path(".chatbridge_undo/x.json")
+    with pytest.raises(ValueError):
+        fm.safe_path(".git/config")
+    # traversal into protected dir is also blocked
+    with pytest.raises(ValueError):
+        fm.safe_path("a/../.chatbridge_undo/x.json")
+
+
+def test_safe_path_allows_symlink_inside_root(fm, tmp_path):
+    src = fm.root / "inside.txt"
+    src.write_text("hi", encoding="utf-8")
+    link = fm.root / "link.txt"
+    try:
+        link.symlink_to(src)
+    except OSError:
+        pytest.skip("symlink creation not supported")
+    resolved = fm.safe_path("link.txt")
+    assert resolved == src.resolve()
+
+
+def test_safe_path_rejects_symlink_escape(fm, tmp_path):
+    outside = tmp_path.parent / "outside_escape.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = fm.root / "escape.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation not supported")
+    with pytest.raises(ValueError):
+        fm.safe_path("escape.txt")
+
+
+def test_scan_files_respects_limit(fm):
+    for i in range(5):
+        (fm.root / f"f{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
+    items = fm.scan_files(limit=2)
+    assert len(items) <= 2
+
+
+def test_undo_last_rejects_tampered_batch(fm, tmp_path):
+    backups = []
+    fm.write_with_backup("a.py", "def alpha():\n    return 7\n", backups)
+    fm.commit_undo_batch(backups)
+    # tamper the batch to point outside root
+    batch = next((fm.root / ".chatbridge_undo").glob("undo_*.json"))
+    import json
+    payload = json.loads(batch.read_text(encoding="utf-8"))
+    payload[0]["path"] = str(tmp_path.parent / "outside_escape.txt")
+    batch.write_text(json.dumps(payload), encoding="utf-8")
+    assert fm.undo_last() == 0
+
+
+def test_undo_last_rejects_malformed_json(fm):
+    fm._undo_dir.mkdir(parents=True, exist_ok=True)
+    (fm._undo_dir / "undo_1.json").write_text("{not json", encoding="utf-8")
+    assert fm.undo_last() == 0
+
+
+def test_undo_batch_filenames_are_unique(fm):
+    b1 = []
+    fm.write_with_backup("a.py", "def alpha():\n    return 1\n", b1)
+    fm.commit_undo_batch(b1)
+    b2 = []
+    fm.write_with_backup("a.py", "def alpha():\n    return 2\n", b2)
+    fm.commit_undo_batch(b2)
+    names = list((fm.root / ".chatbridge_undo").glob("undo_*.json"))
+    assert len(names) >= 2
+    assert len(names) == len(set(names))

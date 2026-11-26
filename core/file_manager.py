@@ -6,6 +6,7 @@ import re
 import string
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,8 @@ class FileManager:
     }
     MAX_CONTENT_SCAN_BYTES = 64 * 1024
     MAX_SCORE_FILE_BYTES = 2_000_000
+    DEFAULT_SCAN_LIMIT = 1500
+    TREE_LIMIT = 250
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         self._root = Path(root_dir or os.getcwd()).resolve()
@@ -51,10 +54,25 @@ class FileManager:
         self._root = candidate
         return self._root
 
+    PROTECTED_DIRS = {".chatbridge_undo", ".git"}
+
     def safe_path(self, rel_path: str) -> Path:
-        target = (self._root / rel_path.strip()).resolve()
+        if not isinstance(rel_path, str):
+            raise ValueError(f"Path must be a string: {rel_path!r}")
+        cleaned = rel_path.strip()
+        if not cleaned:
+            raise ValueError("Path must not be empty.")
+        target = (self._root / cleaned).resolve()
         if not target.is_relative_to(self._root):
             raise ValueError(f"Access denied outside project root: {rel_path}")
+        if target == self._root:
+            raise ValueError(f"Access denied to project root: {rel_path}")
+        try:
+            rel = target.relative_to(self._root)
+        except ValueError:
+            raise ValueError(f"Access denied outside project root: {rel_path}")
+        if any(part in self.PROTECTED_DIRS for part in rel.parts):
+            raise ValueError(f"Access denied to protected path: {rel_path}")
         return target
 
     def browse_dirs(self, path_str: str = "") -> dict:
@@ -98,7 +116,13 @@ class FileManager:
                 return True
         return False
 
-    def scan_files(self, limit: int = 1500, include_ignored: bool = False) -> list[dict]:
+    def scan_files(self, limit: int = None, include_ignored: bool = False) -> list[dict]:
+        if limit is None:
+            limit = self.DEFAULT_SCAN_LIMIT
+        try:
+            limit = max(1, int(limit))
+        except (TypeError, ValueError):
+            limit = self.DEFAULT_SCAN_LIMIT
         items: list[dict] = []
         try:
             patterns = self._load_ignore_patterns() if not include_ignored else []
@@ -282,12 +306,27 @@ class FileManager:
         if not backups:
             return
         self._undo_dir.mkdir(parents=True, exist_ok=True)
-        batch_file = self._undo_dir / f"undo_{int(time.time() * 1000)}.json"
+        batch_file = self._undo_dir / f"undo_{int(time.time() * 1000)}_{uuid.uuid4().hex}.json"
         payload = [
             {"path": str(b.path), "existed": b.existed, "content": b.content}
             for b in backups
         ]
         self._atomic_write(batch_file, json.dumps(payload, ensure_ascii=False))
+
+    def _is_contained_path(self, candidate: Path) -> bool:
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            return False
+        if not resolved.is_relative_to(self._root):
+            return False
+        if resolved == self._root:
+            return False
+        try:
+            rel = resolved.relative_to(self._root)
+        except ValueError:
+            return False
+        return not any(part in self.PROTECTED_DIRS for part in rel.parts)
 
     def undo_last(self) -> int:
         if not self._undo_dir.is_dir():
@@ -296,12 +335,35 @@ class FileManager:
         if not batches:
             return 0
         latest = batches[-1]
-        entries = json.loads(latest.read_text(encoding="utf-8"))
-        for entry in reversed(entries):
+        try:
+            raw = latest.read_text(encoding="utf-8")
+            entries = json.loads(raw)
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            return 0
+        if not isinstance(entries, list) or not entries:
+            return 0
+        validated: list[tuple[Path, bool, str]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return 0
+            if not all(k in entry for k in ("path", "existed", "content")):
+                return 0
+            if not isinstance(entry["path"], str) or not isinstance(entry["existed"], bool) or not isinstance(entry["content"], str):
+                return 0
             p = Path(entry["path"])
-            if entry["existed"]:
-                self._atomic_write(p, entry["content"])
-            elif p.exists():
-                p.unlink()
-        latest.unlink()
-        return len(entries)
+            if not self._is_contained_path(p):
+                return 0
+            validated.append((p, entry["existed"], entry["content"]))
+        try:
+            for p, existed, content in reversed(validated):
+                if existed:
+                    self._atomic_write(p, content)
+                elif p.exists():
+                    p.unlink()
+        except Exception:
+            return 0
+        try:
+            latest.unlink()
+        except OSError:
+            pass
+        return len(validated)
