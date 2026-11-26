@@ -264,6 +264,7 @@ const App = {
     this.lastFailedErrors = [];
     this.lastCopiedPrompt = "";
     this.lastCapturedText = "";
+    this.clipboard = { path: "", action: "" };
     this.selected.clear();
 
     document.getElementById("task").value = "";
@@ -368,7 +369,11 @@ const App = {
 
   async ctxPaste() {
     if (!this.clipboard.path) return;
-    const destDir = this.ctxPath;
+    const target = this.ctxPath;
+    const isFile = this.files.some((f) => f.path === target);
+    const destDir = isFile
+      ? (target.includes("/") ? target.substring(0, target.lastIndexOf("/")) : "")
+      : target;
     const res = await fetch("/api/file/paste", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -666,6 +671,7 @@ const App = {
     });
     const data = await res.json();
     if (!res.ok) return this.toast(data.error || "Rename failed", "red");
+    if (this.editingPath === oldPath) this.closeEditor();
     this.selected.delete(oldPath);
     await this.loadFiles();
     this.toast(`Renamed to ${newPath.trim()}`, "success");
@@ -682,6 +688,7 @@ const App = {
     });
     const data = await res.json();
     if (!res.ok) return this.toast(data.error || "Delete failed", "red");
+    if (this.editingPath === target) this.closeEditor();
     this.selected.delete(target);
     await this.loadFiles();
     this.toast(`Deleted ${target}`, "success");
@@ -724,7 +731,11 @@ const App = {
             },
           })),
         });
+      } else {
+        this.closeChoiceModal();
       }
+    } else {
+      this.closeChoiceModal();
     }
   },
 
@@ -1064,6 +1075,8 @@ const App = {
       this.lastFailedErrors = [];
       this.setLedState(true);
       await this.loadFiles();
+      const undoModal = document.getElementById("undoModal");
+      if (undoModal && !undoModal.classList.contains("hidden")) await this.openUndoModal();
       this.toast(data.message || "Last change undone.", "success");
     } catch (e) {
       this.toast("Undo failed: connection error", "red");
@@ -1114,10 +1127,12 @@ const App = {
       });
       const data = await res.json();
       if (!res.ok) return this.toast(data.error || "Undo failed", "red");
-      this.closeUndoModal();
       this.lastFailedErrors = [];
       this.setLedState(true);
       await this.loadFiles();
+      const undoModal = document.getElementById("undoModal");
+      if (undoModal && !undoModal.classList.contains("hidden")) await this.openUndoModal();
+      else this.closeUndoModal();
       this.toast(data.message || "Undone", "success");
     } catch (e) {
       this.toast("Undo failed: connection error", "red");
@@ -1436,9 +1451,11 @@ const App = {
     this.editingPath = "";
   },
 
+  _highlightTimer: null,
   handleEditorInput() {
     this.syncEditorGutter();
-    this.updateHighlighting();
+    if (this._highlightTimer) clearTimeout(this._highlightTimer);
+    this._highlightTimer = setTimeout(() => this.updateHighlighting(), 120);
   },
 
   syncEditorGutter() {

@@ -64,7 +64,7 @@ Windows paths such as `C:\project\file.py:10-20` are supported.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests -q                 # unit tests (58+)
+pytest tests -q                 # unit tests (80+)
 python -m playwright install chromium
 pytest e2e -q                   # Playwright end-to-end tests
 ```

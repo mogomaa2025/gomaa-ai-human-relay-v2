@@ -198,7 +198,7 @@ def test_undo_batch_rejects_bad_name(fm):
 
 def test_file_manager_has_lock(fm):
     import threading
-    assert type(fm._lock) is type(threading.Lock())
+    assert type(fm._lock) is type(threading.RLock())
 
 
 def test_read_text_splits_on_newline_only(fm):

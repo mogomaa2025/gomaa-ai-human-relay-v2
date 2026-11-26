@@ -43,15 +43,16 @@ class FileManager:
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         self._root = Path(root_dir or os.getcwd()).resolve()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     @property
     def root(self) -> Path:
-        return self._root
+        with self._lock:
+            return self._root
 
     @property
     def _undo_dir(self) -> Path:
-        return self._root / ".chatbridge_undo"
+        return self.root / ".chatbridge_undo"
 
     def set_root(self, new_root: str) -> Path:
         candidate = Path(new_root.strip()).resolve()
@@ -64,23 +65,28 @@ class FileManager:
     PROTECTED_DIRS = {".chatbridge_undo", ".git"}
 
     def safe_path(self, rel_path: str) -> Path:
-        if not isinstance(rel_path, str):
-            raise ValueError(f"Path must be a string: {rel_path!r}")
-        cleaned = rel_path.strip()
-        if not cleaned:
-            raise ValueError("Path must not be empty.")
-        target = (self._root / cleaned).resolve()
-        if not target.is_relative_to(self._root):
-            raise ValueError(f"Access denied outside project root: {rel_path}")
-        if target == self._root:
-            raise ValueError(f"Access denied to project root: {rel_path}")
-        try:
-            rel = target.relative_to(self._root)
-        except ValueError:
-            raise ValueError(f"Access denied outside project root: {rel_path}")
-        if any(part in self.PROTECTED_DIRS for part in rel.parts):
-            raise ValueError(f"Access denied to protected path: {rel_path}")
-        return target
+        with self._lock:
+            if not isinstance(rel_path, str):
+                raise ValueError(f"Path must be a string: {rel_path!r}")
+            if "\x00" in rel_path:
+                raise ValueError(f"Path must not contain NUL bytes: {rel_path!r}")
+            cleaned = rel_path.strip()
+            if not cleaned:
+                raise ValueError("Path must not be empty.")
+            if any(ord(ch) < 32 for ch in cleaned):
+                raise ValueError(f"Path must not contain control characters: {rel_path!r}")
+            target = (self._root / cleaned).resolve()
+            if not target.is_relative_to(self._root):
+                raise ValueError(f"Access denied outside project root: {rel_path}")
+            if target == self._root:
+                raise ValueError(f"Access denied to project root: {rel_path}")
+            try:
+                rel = target.relative_to(self._root)
+            except ValueError:
+                raise ValueError(f"Access denied outside project root: {rel_path}")
+            if any(part in self.PROTECTED_DIRS for part in rel.parts):
+                raise ValueError(f"Access denied to protected path: {rel_path}")
+            return target
 
     @staticmethod
     def _split_lines(text: str) -> list[str]:
@@ -112,31 +118,32 @@ class FileManager:
 
     def browse_dirs(self, path_str: str = "") -> dict:
         """Pure-Python directory browser for Windows drives & folders (no subprocess)."""
-        target = Path(path_str.strip()).resolve() if path_str.strip() else self._root
-        if not target.is_dir():
-            target = self._root
+        with self._lock:
+            target = Path(path_str.strip()).resolve() if path_str.strip() else self._root
+            if not target.is_dir():
+                target = self._root
 
-        drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
-        dirs = []
-        try:
-            for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
-                if entry.is_dir() and not entry.name.startswith("."):
-                    dirs.append({"name": entry.name, "path": str(entry)})
-        except PermissionError:
-            pass
+            drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+            dirs = []
+            try:
+                for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        dirs.append({"name": entry.name, "path": str(entry)})
+            except PermissionError:
+                pass
 
-        parent = str(target.parent) if target.parent != target else ""
-        return {
-            "current": str(target),
-            "parent": parent,
-            "drives": drives,
-            "dirs": dirs,
-        }
+            parent = str(target.parent) if target.parent != target else ""
+            return {
+                "current": str(target),
+                "parent": parent,
+                "drives": drives,
+                "dirs": dirs,
+            }
 
     def _load_ignore_patterns(self) -> list[str]:
         patterns = [".env", ".env.*"]
         for fname in (".gitignore", ".chatbridgeignore"):
-            p = self._root / fname
+            p = self.root / fname
             if p.is_file():
                 for line in self._split_lines(p.read_text(encoding="utf-8", errors="ignore")):
                     line = line.strip()
@@ -158,12 +165,13 @@ class FileManager:
             limit = max(1, int(limit))
         except (TypeError, ValueError):
             limit = self.DEFAULT_SCAN_LIMIT
+        root = self.root
         items: list[dict] = []
         try:
             patterns = self._load_ignore_patterns() if not include_ignored else []
-            for dirpath, dirnames, filenames in os.walk(self._root):
+            for dirpath, dirnames, filenames in os.walk(root):
                 try:
-                    rel_dir = Path(dirpath).relative_to(self._root)
+                    rel_dir = Path(dirpath).relative_to(root)
                 except Exception:
                     continue
                 kept_dirs = []
@@ -185,7 +193,7 @@ class FileManager:
                         p = Path(dirpath) / fname
                         if p.suffix.lower() in self.BINARY_EXTS:
                             continue
-                        rel = p.relative_to(self._root).as_posix()
+                        rel = p.relative_to(root).as_posix()
                         if not include_ignored and self._is_ignored(rel, fname, patterns):
                             continue
                         size = p.stat().st_size
@@ -307,29 +315,31 @@ class FileManager:
 
     def read_raw(self, rel_path: str) -> str:
         """Read exact raw text preserving original CRLF/LF line endings."""
-        p = self.safe_path(rel_path)
-        if not p.is_file():
-            raise FileNotFoundError(f"File not found: {rel_path}")
-        try:
-            with p.open("rb") as bf:
-                sample = bf.read(8192)
-            if self._is_binary_bytes(sample):
-                raise ValueError(f"Binary file cannot be read as text: {rel_path}")
-        except OSError:
-            raise
-        with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
-            return fh.read()
+        with self._lock:
+            p = self.safe_path(rel_path)
+            if not p.is_file():
+                raise FileNotFoundError(f"File not found: {rel_path}")
+            try:
+                with p.open("rb") as bf:
+                    sample = bf.read(8192)
+                if self._is_binary_bytes(sample):
+                    raise ValueError(f"Binary file cannot be read as text: {rel_path}")
+            except OSError:
+                raise
+            with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+                return fh.read()
 
     def read_text(self, rel_path: str, start_line: int | None = None, end_line: int | None = None) -> tuple[str, int]:
-        text = self.read_raw(rel_path)
-        lines = self._split_lines(text)
-        total = len(lines)
-        if start_line is None and end_line is None:
-            return text, total
-        s = max(1, start_line or 1)
-        e = min(total, end_line or total)
-        sliced = [f"{idx}: {lines[idx - 1]}" for idx in range(s, e + 1)]
-        return "\n".join(sliced), total
+        with self._lock:
+            text = self.read_raw(rel_path)
+            lines = self._split_lines(text)
+            total = len(lines)
+            if start_line is None and end_line is None:
+                return text, total
+            s = max(1, start_line or 1)
+            e = min(total, end_line or total)
+            sliced = [f"{idx}: {lines[idx - 1]}" for idx in range(s, e + 1)]
+            return "\n".join(sliced), total
 
     @staticmethod
     def _atomic_write(target: Path, content: str) -> None:
@@ -398,16 +408,16 @@ class FileManager:
         try:
             path_obj = Path(candidate)
             if not path_obj.is_absolute():
-                path_obj = self._root / path_obj
+                path_obj = self.root / path_obj
             resolved = path_obj.resolve()
         except (OSError, RuntimeError):
             return False
-        if not resolved.is_relative_to(self._root):
+        if not resolved.is_relative_to(self.root):
             return False
-        if resolved == self._root:
+        if resolved == self.root:
             return False
         try:
-            rel = resolved.relative_to(self._root)
+            rel = resolved.relative_to(self.root)
         except ValueError:
             return False
         return not any(part in self.PROTECTED_DIRS for part in rel.parts)
@@ -444,19 +454,22 @@ class FileManager:
                 _discard()
                 return 0
             validated.append((p, entry["existed"], entry["content"]))
-        try:
-            for p, existed, content in reversed(validated):
+        restored = 0
+        for p, existed, content in reversed(validated):
+            try:
                 if existed:
                     self._atomic_write(p, content)
                 elif p.exists():
                     p.unlink()
-        except Exception:
-            return 0
-        try:
-            batch_path.unlink()
-        except OSError:
-            pass
-        return len(validated)
+                restored += 1
+            except Exception:
+                continue
+        if restored > 0:
+            try:
+                batch_path.unlink()
+            except OSError:
+                pass
+        return restored
 
     def undo_last(self) -> int:
         with self._lock:
@@ -468,19 +481,20 @@ class FileManager:
             return self._restore_batch_unlocked(batches[-1])
 
     def list_undo_batches(self) -> list[dict]:
-        if not self._undo_dir.is_dir():
-            return []
-        out: list[dict] = []
-        for b in sorted(self._undo_dir.glob("undo_*.json")):
-            count = 0
-            try:
-                entries = json.loads(b.read_text(encoding="utf-8"))
-                if isinstance(entries, list):
-                    count = len(entries)
-            except Exception:
+        with self._lock:
+            if not self._undo_dir.is_dir():
+                return []
+            out: list[dict] = []
+            for b in sorted(self._undo_dir.glob("undo_*.json")):
                 count = 0
-            out.append({"name": b.name, "count": count})
-        return out
+                try:
+                    entries = json.loads(b.read_text(encoding="utf-8"))
+                    if isinstance(entries, list):
+                        count = len(entries)
+                except Exception:
+                    count = 0
+                out.append({"name": b.name, "count": count})
+            return out
 
     def undo_batch(self, name: str) -> int:
         if not isinstance(name, str) or not name:

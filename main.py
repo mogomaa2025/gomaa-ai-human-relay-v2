@@ -58,6 +58,8 @@ def api_project():
     raw_path = data.get("path", "")
     if not isinstance(raw_path, str):
         return jsonify({"error": "path must be a string."}), 400
+    if not raw_path.strip():
+        return jsonify({"error": "path must not be empty."}), 400
     try:
         new_root = file_manager.set_root(raw_path)
         return jsonify({"ok": True, "root": str(new_root)})
@@ -93,7 +95,9 @@ def api_build_prompt():
     raw_chunk = data.get("chunk_size")
     chunk_size = None
     if raw_chunk not in (None, ""):
-        if isinstance(raw_chunk, bool) or not isinstance(raw_chunk, (int, str)):
+        if isinstance(raw_chunk, bool) or not isinstance(raw_chunk, (int, str, float)):
+            return jsonify({"error": "chunk_size must be an integer."}), 400
+        if isinstance(raw_chunk, float) and not raw_chunk.is_integer():
             return jsonify({"error": "chunk_size must be an integer."}), 400
         try:
             chunk_size = int(raw_chunk)
@@ -320,6 +324,8 @@ def api_paste_item():
     action = data.get("action", "copy")
     if not isinstance(src_path, str) or not isinstance(dest_dir, str) or not isinstance(action, str):
         return jsonify({"error": "src_path, dest_dir, and action must be strings."}), 400
+    if action not in ("copy", "cut"):
+        return jsonify({"error": "action must be 'copy' or 'cut'."}), 400
     try:
         src = file_manager.safe_path(src_path)
         if not src.exists():
@@ -338,6 +344,7 @@ def api_paste_item():
             import shutil
             if dst.exists():
                 return jsonify({"error": f"Destination already exists: {dest_rel}"}), 400
+            dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(src, dst, symlinks=True)
             if action == "cut":
                 shutil.rmtree(src)

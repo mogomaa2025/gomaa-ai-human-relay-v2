@@ -1,5 +1,19 @@
 # CHANGELOG — ChatBridge (Gomaa Relay)
 
+## Round-4 batch (implemented)
+- `safe_path` now rejects NUL bytes and control characters in paths.
+- Undo batch is committed via `try/finally` so partial writes remain undoable on fatal errors.
+- Undo restore now returns the count of successfully restored entries instead of discarding the whole batch on one failure.
+- Directory paste creates missing parent directories; `action` validated as copy/cut.
+- Context-menu Paste resolves the correct parent when invoked on a file.
+- `set_root` rejects empty paths; `api_project` validates accordingly.
+- Thread-safety: lock is now an RLock and `root`/reads/listing snapshot under lock.
+- Prompt outline extraction sorted by line number.
+- Frontend: debounced editor highlighting, undo-list refresh after undo, @-mention modal closes when no matches, editor closes on delete/rename, clipboard cleared on goal reset.
+- `chunk_size` rejects non-integral floats; `answers`/`applied_log` coerced/filtered.
+- README test count refreshed (85+).
+- Dropped: undo batch size cap already handled by existing pruning (no change); symlink paste preservation infeasible under resolved `safe_path` (copy follows link).
+
 ## Round-3 batch (implemented)
 - Undo self-healing: tampered/malformed batch files are removed automatically so undo is not permanently blocked.
 - `_fuzzy_line_replace` now splits on `\n` only (no Unicode line separators), matching `FileManager._split_lines`.

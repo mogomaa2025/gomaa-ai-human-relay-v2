@@ -159,68 +159,69 @@ class PatchEngine:
         results: list[dict] = []
         backups: list[BackupEntry] = []
 
-        for op in ops:
-            if not isinstance(op, dict):
-                results.append({"path": "-", "status": "error", "message": "Invalid operation (not an object)."})
-                continue
-            rel = op.get("path")
-            if not isinstance(rel, str) or not rel.strip():
-                results.append({"path": str(rel) if rel is not None else "-", "status": "error", "message": "Operation is missing a valid path."})
-                continue
-            op_type = op.get("type")
-            if op_type not in ("edit", "write"):
-                results.append({"path": rel, "status": "error", "message": f"Unknown operation type: {op_type!r}."})
-                continue
-            try:
-                if op_type == "edit":
-                    old_full = self._fm.read_raw(rel)
-                    use_crlf = "\r\n" in old_full
-                    norm_full = old_full.replace("\r\n", "\n")
-                    norm_old = op["old"].replace("\r\n", "\n")
-                    norm_new = op["new"].replace("\r\n", "\n")
-
-                    count = norm_full.count(norm_old)
-                    if count == 1:
-                        replaced = norm_full.replace(norm_old, norm_new, 1)
-                    elif count == 0:
-                        fuzzy = self._fuzzy_line_replace(norm_full, norm_old, norm_new)
-                        if fuzzy is None:
-                            results.append({"path": rel, "status": "error", "message": "OLD block not found in file."})
-                            continue
-                        replaced = fuzzy
-                    else:
-                        results.append({"path": rel, "status": "error", "message": f"Match found {count} occurrences; include more context lines."})
-                        continue
-
-                    new_full = self._preserve_newlines(replaced, use_crlf)
-
-                elif op_type == "write":
-                    try:
+        try:
+            for op in ops:
+                if not isinstance(op, dict):
+                    results.append({"path": "-", "status": "error", "message": "Invalid operation (not an object)."})
+                    continue
+                rel = op.get("path")
+                if not isinstance(rel, str) or not rel.strip():
+                    results.append({"path": str(rel) if rel is not None else "-", "status": "error", "message": "Operation is missing a valid path."})
+                    continue
+                op_type = op.get("type")
+                if op_type not in ("edit", "write"):
+                    results.append({"path": rel, "status": "error", "message": f"Unknown operation type: {op_type!r}."})
+                    continue
+                try:
+                    if op_type == "edit":
                         old_full = self._fm.read_raw(rel)
                         use_crlf = "\r\n" in old_full
-                    except FileNotFoundError:
-                        old_full = ""
-                        use_crlf = False
-                    new_full = self._preserve_newlines(op["content"], use_crlf)
-                else:
-                    continue
+                        norm_full = old_full.replace("\r\n", "\n")
+                        norm_old = op["old"].replace("\r\n", "\n")
+                        norm_new = op["new"].replace("\r\n", "\n")
 
-                syntax_err = self._validate_syntax(rel, new_full)
-                if syntax_err:
-                    results.append({"path": rel, "status": "error", "message": syntax_err})
-                    continue
+                        count = norm_full.count(norm_old)
+                        if count == 1:
+                            replaced = norm_full.replace(norm_old, norm_new, 1)
+                        elif count == 0:
+                            fuzzy = self._fuzzy_line_replace(norm_full, norm_old, norm_new)
+                            if fuzzy is None:
+                                results.append({"path": rel, "status": "error", "message": "OLD block not found in file."})
+                                continue
+                            replaced = fuzzy
+                        else:
+                            results.append({"path": rel, "status": "error", "message": f"Match found {count} occurrences; include more context lines."})
+                            continue
 
-                diff_lines = self._build_diff_lines(old_full, new_full, rel)
-                if apply_changes:
-                    self._fm.write_with_backup(rel, new_full, backups)
-                results.append({
-                    "path": rel,
-                    "status": "applied" if apply_changes else "ready",
-                    "diff_lines": diff_lines,
-                })
-            except Exception as e:
-                results.append({"path": rel, "status": "error", "message": str(e)})
+                        new_full = self._preserve_newlines(replaced, use_crlf)
 
-        if apply_changes:
-            self._fm.commit_undo_batch(backups)
+                    elif op_type == "write":
+                        try:
+                            old_full = self._fm.read_raw(rel)
+                            use_crlf = "\r\n" in old_full
+                        except FileNotFoundError:
+                            old_full = ""
+                            use_crlf = False
+                        new_full = self._preserve_newlines(op["content"], use_crlf)
+                    else:
+                        continue
+
+                    syntax_err = self._validate_syntax(rel, new_full)
+                    if syntax_err:
+                        results.append({"path": rel, "status": "error", "message": syntax_err})
+                        continue
+
+                    diff_lines = self._build_diff_lines(old_full, new_full, rel)
+                    if apply_changes:
+                        self._fm.write_with_backup(rel, new_full, backups)
+                    results.append({
+                        "path": rel,
+                        "status": "applied" if apply_changes else "ready",
+                        "diff_lines": diff_lines,
+                    })
+                except Exception as e:
+                    results.append({"path": rel, "status": "error", "message": str(e)})
+        finally:
+            if apply_changes and backups:
+                self._fm.commit_undo_batch(backups)
         return results

@@ -60,14 +60,16 @@ class PromptBuilder:
             try:
                 tree = ast.parse(content)
                 lines = self._fm._split_lines(content)
-                out = []
+                collected = []
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.Import, ast.ImportFrom)):
-                        out.append(f"L{node.lineno}: {lines[node.lineno - 1]}")
+                        collected.append((node.lineno, f"L{node.lineno}: {lines[node.lineno - 1]}"))
                     elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-                        out.append(f"L{node.lineno}: {lines[node.lineno - 1]}")
+                        collected.append((node.lineno, f"L{node.lineno}: {lines[node.lineno - 1]}"))
+                collected.sort(key=lambda x: x[0])
+                out = [text for _, text in collected]
                 if out:
-                    return "\n".join(dict.fromkeys(out))
+                    return "\\n".join(dict.fromkeys(out))
             except SyntaxError:
                 pass
 
@@ -151,8 +153,12 @@ class PromptBuilder:
             file_specs = []
         if not isinstance(answers, list):
             answers = []
+        else:
+            answers = [a for a in answers if isinstance(a, dict)]
         if not isinstance(applied_log, list):
             applied_log = []
+        else:
+            applied_log = [str(item) for item in applied_log]
 
         if chunk_size is None:
             effective_chunk = cfg["chunk_chars"]
