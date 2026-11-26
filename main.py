@@ -347,9 +347,21 @@ def api_paste_item():
         return jsonify({"error": str(e)}), 400
 
 
+@app.get("/api/undo/list")
+def api_undo_list():
+    return jsonify({"batches": file_manager.list_undo_batches()})
+
+
 @app.post("/api/undo")
 def api_undo():
-    count = file_manager.undo_last()
+    data = _json_body() or {}
+    name = data.get("batch") if isinstance(data, dict) else None
+    if name is None:
+        count = file_manager.undo_last()
+    else:
+        if not isinstance(name, str):
+            return jsonify({"error": "batch must be a string."}), 400
+        count = file_manager.undo_batch(name)
     if count == 0:
         return jsonify({"error": "Nothing to undo."}), 400
     return jsonify({"message": f"Reverted {count} file(s)."})

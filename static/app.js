@@ -11,6 +11,7 @@ const App = {
   planTasks: [],
   editingPath: "",
   lastCopiedPrompt: "",
+  lastCapturedText: "",
   lastFailedErrors: [],
   isProcessing: false,
   ctxPath: "",
@@ -262,6 +263,7 @@ const App = {
     this.planTasks = [];
     this.lastFailedErrors = [];
     this.lastCopiedPrompt = "";
+    this.lastCapturedText = "";
     this.selected.clear();
 
     document.getElementById("task").value = "";
@@ -291,10 +293,19 @@ const App = {
   clipboard: { path: "", action: "" }, // { path, action: "copy" | "cut" }
 
   async loadFiles() {
-    const res = await fetch(`/api/files?include_ignored=${this.showIgnored}`);
-    const data = await res.json();
-    this.files = data.files || [];
-    this.renderFiles();
+    try {
+      const res = await fetch(`/api/files?include_ignored=${this.showIgnored}`);
+      if (!res.ok) {
+        let msg = "Failed to load files";
+        try { const d = await res.json(); if (d.error) msg = d.error; } catch (e) {}
+        return this.toast(msg, "red");
+      }
+      const data = await res.json();
+      this.files = data.files || [];
+      this.renderFiles();
+    } catch (e) {
+      this.toast("Failed to load files: connection error", "red");
+    }
   },
 
   toggleIgnored() {
@@ -392,6 +403,11 @@ const App = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task }),
     });
+    if (!res.ok) {
+      let msg = "Smart Select failed";
+      try { const d = await res.json(); if (d.error) msg = d.error; } catch (e) {}
+      return this.toast(msg, "red");
+    }
     const data = await res.json();
     this.selected.clear();
     (data.selected || []).forEach((s) => {
@@ -897,7 +913,17 @@ const App = {
         mode: this.mode,
       }),
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      this.setLedState(false, "Invalid server response");
+      return this.toast("Failed to build prompt: invalid response", "red");
+    }
+    if (!res.ok) {
+      this.setLedState(false, data.error || "Prompt build failed");
+      return this.toast(data.error || "Failed to build prompt", "red");
+    }
     document.getElementById("generatedPrompt").value = data.full_prompt;
     document.getElementById("promptMeta").textContent =
       `${data.chars.toLocaleString()} chars (~${data.est_tokens.toLocaleString()} tokens) · ${data.mode}`;
@@ -1037,6 +1063,60 @@ const App = {
     }
   },
 
+  async openUndoModal() {
+    try {
+      const res = await fetch("/api/undo/list");
+      const data = await res.json();
+      const box = document.getElementById("undoList");
+      box.innerHTML = "";
+      const batches = (data && data.batches) || [];
+      if (!batches.length) {
+        box.innerHTML = `<div class="muted" style="padding: 12px;">No undo batches available.</div>`;
+      } else {
+        batches.forEach((b) => {
+          const row = document.createElement("div");
+          row.className = "json-part-row";
+          const meta = document.createElement("span");
+          meta.className = "json-part-meta";
+          meta.textContent = `${b.name} (${b.count} file(s))`;
+          const btn = document.createElement("button");
+          btn.className = "btn ghost";
+          btn.textContent = "Undo";
+          btn.onclick = async () => { await this.undoBatch(b.name); };
+          row.append(meta, btn);
+          box.appendChild(row);
+        });
+      }
+      document.getElementById("undoModal").classList.remove("hidden");
+    } catch (e) {
+      this.toast("Failed to load undo history", "red");
+    }
+  },
+
+  closeUndoModal() {
+    const el = document.getElementById("undoModal");
+    if (el) el.classList.add("hidden");
+  },
+
+  async undoBatch(name) {
+    try {
+      const res = await fetch("/api/undo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch: name }),
+      });
+      const data = await res.json();
+      if (!res.ok) return this.toast(data.error || "Undo failed", "red");
+      this.closeUndoModal();
+      this.lastFailedErrors = [];
+      this.setLedState(true);
+      await this.loadFiles();
+      this.toast(data.message || "Undone", "success");
+    } catch (e) {
+      this.toast("Undo failed: connection error", "red");
+    }
+  },
+
   renderQuestions(questions) {
     this.pendingQuestions = questions || [];
     const box = document.getElementById("questionsOut");
@@ -1094,6 +1174,7 @@ const App = {
       const clipText = await navigator.clipboard.readText();
       const trimmed = (clipText || "").trim();
       if (!trimmed || trimmed === this.lastCopiedPrompt.trim()) return;
+      if (trimmed === this.lastCapturedText) return; // no-replay guard
       if (trimmed.includes("OUTPUT FORMAT (REQUIRED")) return;
 
       const hasProtocolTag = /<<<(EDIT|WRITE|NEED_FILES|ASK|PLAN|STATUS)/.test(trimmed);
@@ -1102,8 +1183,7 @@ const App = {
       const aiBox = document.getElementById("aiResponse");
       if (aiBox.value.trim() === trimmed) return;
       aiBox.value = clipText;
-      // Clear clipboard immediately after capturing so old response is never re-captured
-      try { await navigator.clipboard.writeText(""); } catch (err) {}
+      this.lastCapturedText = trimmed;
       await this.runOps(true);
     } catch (e) {
       // Clipboard read requires focus/permission
@@ -1496,6 +1576,16 @@ const App = {
         if (!autoSmart.checked) clearTimeout(smartTimer);
       });
     }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      ["browserModal", "editorModal", "choiceModal", "errorModal", "optionsModal"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add("hidden");
+      });
+      const ctx = document.getElementById("contextMenu");
+      if (ctx) ctx.classList.add("hidden");
+    });
 
     const editorArea = document.getElementById("editorCode");
     editorArea.addEventListener("keydown", (e) => {

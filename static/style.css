@@ -118,7 +118,7 @@ details[open] > .plan-summary::before { content: "▾ "; }
 .editor-wrap { display: flex; flex: 1; min-height: 0; border: 1px solid #334155; border-radius: 6px; background: #020617; overflow: hidden; position: relative; }
 .editor-gutter { margin: 0; padding: 10px 8px; background: #0f172a; color: #64748b; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5; text-align: right; user-select: none; overflow: hidden; min-width: 44px; border-right: 1px solid #1e293b; z-index: 3; }
 .editor-textarea { flex: 1; border: none; border-radius: 0; background: transparent; color: transparent; caret-color: #e2e8f0; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5; padding: 10px 12px; resize: none; tab-size: 4; outline: none; white-space: pre; overflow: auto; box-sizing: border-box; z-index: 2; }
-.editor-backdrop { position: absolute; top: 10px; left: 52px; right: 12px; bottom: 10px; pointer-events: none; white-space: pre; overflow: hidden; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5; color: var(--text); z-index: 1; }
+.editor-backdrop { position: absolute; top: 10px; left: 57px; right: 12px; bottom: 10px; pointer-events: none; white-space: pre; overflow: hidden; font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5; color: var(--text); z-index: 1; }
 
 .syntax-kw { color: #f472b6; font-weight: bold; }
 .syntax-str { color: #a5f3fc; }
@@ -160,3 +160,22 @@ details[open] > .plan-summary::before { content: "▾ "; }
 .json-progress { font-size: 12px; }
 
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .sidebar { height: 320px; } }
+
+@media (max-width: 768px) {
+  .topbar { flex-direction: column; align-items: stretch; }
+  .project-bar { max-width: none; flex-wrap: wrap; }
+  .brand { flex-wrap: wrap; }
+  .mode-picker { min-width: 0; flex: 1; }
+  input, textarea, select { font-size: 14px; }
+  .btn { padding: 10px 12px; min-height: 40px; }
+  .tree-row { padding: 6px 8px; }
+  .modal-card { width: 96vw; max-height: 90vh; overflow: auto; }
+  .editor-modal-card { height: 80vh; }
+}
+
+@media (max-width: 480px) {
+  .layout { padding: 8px 10px; gap: 10px; }
+  .sidebar { height: 260px; }
+  .inline-popup { flex-direction: column; align-items: flex-start; }
+  .context-menu { min-width: 120px; }
+}

@@ -5,6 +5,7 @@ import os
 import re
 import string
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -28,16 +29,21 @@ class FileManager:
     }
     BINARY_EXTS = {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip",
-        ".exe", ".dll", ".pyd", ".so", ".pyc", ".woff", ".woff2", ".ttf",
-        ".mp3", ".mp4", ".db", ".sqlite", ".bin",
+        ".exe", ".dll", ".pyd", ".so", ".dylib", ".o", ".a", ".class",
+        ".jar", ".war", ".tar", ".gz", ".7z", ".rar", ".pyc", ".woff",
+        ".woff2", ".ttf", ".otf", ".mp3", ".mp4", ".mov", ".avi", ".mkv",
+        ".flac", ".ogg", ".wav", ".db", ".sqlite", ".bin", ".psd", ".ai",
     }
     MAX_CONTENT_SCAN_BYTES = 64 * 1024
     MAX_SCORE_FILE_BYTES = 2_000_000
     DEFAULT_SCAN_LIMIT = 1500
     TREE_LIMIT = 250
+    UNDO_MAX_BATCHES = 50
+    UNDO_MAX_BYTES = 50 * 1024 * 1024
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         self._root = Path(root_dir or os.getcwd()).resolve()
+        self._lock = threading.Lock()
 
     @property
     def root(self) -> Path:
@@ -51,7 +57,8 @@ class FileManager:
         candidate = Path(new_root.strip()).resolve()
         if not candidate.is_dir():
             raise ValueError(f"Directory does not exist: {new_root}")
-        self._root = candidate
+        with self._lock:
+            self._root = candidate
         return self._root
 
     PROTECTED_DIRS = {".chatbridge_undo", ".git"}
@@ -74,6 +81,34 @@ class FileManager:
         if any(part in self.PROTECTED_DIRS for part in rel.parts):
             raise ValueError(f"Access denied to protected path: {rel_path}")
         return target
+
+    @staticmethod
+    def _split_lines(text: str) -> list[str]:
+        """Split text into lines on ``\\n`` only.
+
+        Unlike ``str.splitlines()``, this does not split on Unicode line
+        separators (e.g. ``\\u2028``) or other control characters, so line
+        counts stay stable. A single trailing ``\\r`` is stripped to match the
+        previous ``splitlines()`` behaviour for CRLF files.
+        """
+        if text == "":
+            return []
+        lines = text.split("\n")
+        if text.endswith("\n"):
+            lines = lines[:-1]
+        return [line[:-1] if line.endswith("\r") else line for line in lines]
+
+    @staticmethod
+    def _is_binary_bytes(sample: bytes) -> bool:
+        if not sample:
+            return False
+        if b"\x00" in sample:
+            return True
+        try:
+            sample.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        return False
 
     def browse_dirs(self, path_str: str = "") -> dict:
         """Pure-Python directory browser for Windows drives & folders (no subprocess)."""
@@ -154,6 +189,13 @@ class FileManager:
                         if not include_ignored and self._is_ignored(rel, fname, patterns):
                             continue
                         size = p.stat().st_size
+                        try:
+                            with p.open("rb") as bf:
+                                sample = bf.read(8192)
+                            if self._is_binary_bytes(sample):
+                                continue
+                        except OSError:
+                            continue
                         line_count = 0
                         try:
                             with p.open("r", encoding="utf-8", errors="ignore") as fh:
@@ -178,7 +220,7 @@ class FileManager:
 
     def _find_best_line_range(self, raw_text: str, terms: list[str], context_pad: int = 25) -> tuple[int, int] | None:
         """Finds a tight line range around matching keywords when a file is large."""
-        lines = raw_text.splitlines()
+        lines = self._split_lines(raw_text)
         total = len(lines)
         if total <= 90 or not terms:
             return None
@@ -243,7 +285,7 @@ class FileManager:
             rng = self._find_best_line_range(raw_cache, terms) if raw_cache else None
             if rng:
                 s, e = rng
-                est = max(20, int(f["est_tokens"] * ((e - s + 1) / max(1, len(raw_cache.splitlines())))))
+                est = max(20, int(f["est_tokens"] * ((e - s + 1) / max(1, len(self._split_lines(raw_cache))))))
                 selected_map[f["path"]] = {"path": f["path"], "mode": "range", "start": s, "end": e, "tokens": est}
             else:
                 mode = "outline" if f["est_tokens"] > 4000 else "full"
@@ -268,12 +310,19 @@ class FileManager:
         p = self.safe_path(rel_path)
         if not p.is_file():
             raise FileNotFoundError(f"File not found: {rel_path}")
+        try:
+            with p.open("rb") as bf:
+                sample = bf.read(8192)
+            if self._is_binary_bytes(sample):
+                raise ValueError(f"Binary file cannot be read as text: {rel_path}")
+        except OSError:
+            raise
         with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
             return fh.read()
 
     def read_text(self, rel_path: str, start_line: int | None = None, end_line: int | None = None) -> tuple[str, int]:
         text = self.read_raw(rel_path)
-        lines = text.splitlines()
+        lines = self._split_lines(text)
         total = len(lines)
         if start_line is None and end_line is None:
             return text, total
@@ -296,22 +345,54 @@ class FileManager:
             raise
 
     def write_with_backup(self, rel_path: str, content: str, backups: list[BackupEntry]) -> None:
-        p = self.safe_path(rel_path)
-        existed = p.is_file()
-        old = self.read_raw(rel_path) if existed else ""
-        backups.append(BackupEntry(path=p, existed=existed, content=old))
-        self._atomic_write(p, content)
+        with self._lock:
+            p = self.safe_path(rel_path)
+            existed = p.is_file()
+            old = self.read_raw(rel_path) if existed else ""
+            backups.append(BackupEntry(path=p, existed=existed, content=old))
+            self._atomic_write(p, content)
 
     def commit_undo_batch(self, backups: list[BackupEntry]) -> None:
         if not backups:
             return
-        self._undo_dir.mkdir(parents=True, exist_ok=True)
-        batch_file = self._undo_dir / f"undo_{int(time.time() * 1000)}_{uuid.uuid4().hex}.json"
-        payload = [
-            {"path": str(b.path), "existed": b.existed, "content": b.content}
-            for b in backups
-        ]
-        self._atomic_write(batch_file, json.dumps(payload, ensure_ascii=False))
+        with self._lock:
+            self._undo_dir.mkdir(parents=True, exist_ok=True)
+            batch_file = self._undo_dir / f"undo_{int(time.time() * 1000)}_{uuid.uuid4().hex}.json"
+            payload = [
+                {"path": str(b.path), "existed": b.existed, "content": b.content}
+                for b in backups
+            ]
+            self._atomic_write(batch_file, json.dumps(payload, ensure_ascii=False))
+            self._prune_undo_batches()
+
+    def _prune_undo_batches(self) -> None:
+        if not self._undo_dir.is_dir():
+            return
+        batches = sorted(self._undo_dir.glob("undo_*.json"))
+        while len(batches) > self.UNDO_MAX_BATCHES:
+            try:
+                batches[0].unlink()
+            except OSError:
+                pass
+            batches.pop(0)
+        total = 0
+        for b in batches:
+            try:
+                total += b.stat().st_size
+            except OSError:
+                pass
+        idx = 0
+        while total > self.UNDO_MAX_BYTES and idx < len(batches):
+            try:
+                size = batches[idx].stat().st_size
+            except OSError:
+                size = 0
+            try:
+                batches[idx].unlink()
+            except OSError:
+                pass
+            total -= size
+            idx += 1
 
     def _is_contained_path(self, candidate: Path) -> bool:
         try:
@@ -328,15 +409,9 @@ class FileManager:
             return False
         return not any(part in self.PROTECTED_DIRS for part in rel.parts)
 
-    def undo_last(self) -> int:
-        if not self._undo_dir.is_dir():
-            return 0
-        batches = sorted(self._undo_dir.glob("undo_*.json"))
-        if not batches:
-            return 0
-        latest = batches[-1]
+    def _restore_batch_unlocked(self, batch_path: Path) -> int:
         try:
-            raw = latest.read_text(encoding="utf-8")
+            raw = batch_path.read_text(encoding="utf-8")
             entries = json.loads(raw)
         except (OSError, json.JSONDecodeError, UnicodeError):
             return 0
@@ -363,7 +438,44 @@ class FileManager:
         except Exception:
             return 0
         try:
-            latest.unlink()
+            batch_path.unlink()
         except OSError:
             pass
         return len(validated)
+
+    def undo_last(self) -> int:
+        with self._lock:
+            if not self._undo_dir.is_dir():
+                return 0
+            batches = sorted(self._undo_dir.glob("undo_*.json"))
+            if not batches:
+                return 0
+            return self._restore_batch_unlocked(batches[-1])
+
+    def list_undo_batches(self) -> list[dict]:
+        if not self._undo_dir.is_dir():
+            return []
+        out: list[dict] = []
+        for b in sorted(self._undo_dir.glob("undo_*.json")):
+            count = 0
+            try:
+                entries = json.loads(b.read_text(encoding="utf-8"))
+                if isinstance(entries, list):
+                    count = len(entries)
+            except Exception:
+                count = 0
+            out.append({"name": b.name, "count": count})
+        return out
+
+    def undo_batch(self, name: str) -> int:
+        if not isinstance(name, str) or not name:
+            return 0
+        if "/" in name or "\\" in name or ".." in name:
+            return 0
+        if not (name.startswith("undo_") and name.endswith(".json")):
+            return 0
+        path = self._undo_dir / name
+        if not path.is_file():
+            return 0
+        with self._lock:
+            return self._restore_batch_unlocked(path)

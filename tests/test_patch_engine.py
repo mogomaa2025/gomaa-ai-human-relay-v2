@@ -144,6 +144,34 @@ def test_windows_need_files_paths(pe):
     ]
 
 
+def test_fuzzy_match_crlf_file(pe, fm):
+    target = fm.root / "fuzzy_crlf.py"
+    target.write_bytes(b"def f():\r\n    return 1   \r\n")
+    response = '<<<EDIT path="fuzzy_crlf.py">>>\n<<<OLD>>>\ndef f():\n    return 1   \n<<<NEW>>>\ndef f():\n    return 9\n<<<END>>>'
+    results = pe.execute(pe.parse_response(response)["ops"], apply_changes=True)
+    assert results[0]["status"] == "applied"
+    raw = target.read_bytes()
+    assert b"return 9" in raw
+    assert b"\r\n" in raw
+
+
+def test_trailing_newline_preserved_when_original_has_one(pe, fm):
+    (fm.root / "tn.py").write_text("x = 1\n", encoding="utf-8")
+    response = '<<<EDIT path="tn.py">>>\n<<<OLD>>>\nx = 1\n<<<NEW>>>\nx = 2\n<<<END>>>'
+    results = pe.execute(pe.parse_response(response)["ops"], apply_changes=True)
+    assert results[0]["status"] == "applied"
+    assert (fm.root / "tn.py").read_bytes().endswith(b"\n")
+    assert not (fm.root / "tn.py").read_bytes().endswith(b"\n\n")
+
+
+def test_no_trailing_newline_not_added(pe, fm):
+    (fm.root / "ntn.py").write_text("x = 1", encoding="utf-8")
+    response = '<<<EDIT path="ntn.py">>>\n<<<OLD>>>\nx = 1\n<<<NEW>>>\nx = 2\n<<<END>>>'
+    results = pe.execute(pe.parse_response(response)["ops"], apply_changes=True)
+    assert results[0]["status"] == "applied"
+    assert (fm.root / "ntn.py").read_bytes() == b"x = 2"
+
+
 def test_dead_api_removed(pe):
     assert not hasattr(PatchEngine, "_strip_wrappers")
     params = list(inspect.signature(pe.parse_response).parameters)

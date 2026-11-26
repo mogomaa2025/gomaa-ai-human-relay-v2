@@ -158,3 +158,59 @@ def test_undo_batch_filenames_are_unique(fm):
     names = list((fm.root / ".chatbridge_undo").glob("undo_*.json"))
     assert len(names) >= 2
     assert len(names) == len(set(names))
+
+
+def test_binary_bytes_detection():
+    from core.file_manager import FileManager
+    assert not FileManager._is_binary_bytes(b"hello world")
+    assert FileManager._is_binary_bytes(b"\x00\x01")
+    assert FileManager._is_binary_bytes("caf\xc3\xa9".encode("latin-1") + b"\xff")
+    assert not FileManager._is_binary_bytes("caf\xc3\xa9".encode("utf-8"))
+
+
+def test_scan_files_skips_binary_content(fm):
+    (fm.root / "bin.py").write_bytes(b"def x():\n    return 1\n\x00")
+    paths = [i["path"] for i in fm.scan_files()]
+    assert "bin.py" not in paths
+
+
+def test_read_raw_rejects_binary(fm):
+    (fm.root / "blob.txt").write_bytes(b"hello\x00world")
+    with pytest.raises(ValueError):
+        fm.read_raw("blob.txt")
+
+
+def test_undo_list_and_batch(fm):
+    backups = []
+    fm.write_with_backup("a.py", "def alpha():\n    return 7\n", backups)
+    fm.commit_undo_batch(backups)
+    batches = fm.list_undo_batches()
+    assert len(batches) == 1
+    name = batches[0]["name"]
+    assert fm.undo_batch(name) == 1
+    assert fm.list_undo_batches() == []
+
+
+def test_undo_batch_rejects_bad_name(fm):
+    assert fm.undo_batch("../evil.json") == 0
+    assert fm.undo_batch("nope.json") == 0
+
+
+def test_file_manager_has_lock(fm):
+    import threading
+    assert type(fm._lock) is type(threading.Lock())
+
+
+def test_read_text_splits_on_newline_only(fm):
+    (fm.root / "uni.txt").write_text("a\u2028b\nc\n", encoding="utf-8")
+    text, total = fm.read_text("uni.txt")
+    assert total == 2
+    ranged, _ = fm.read_text("uni.txt", 1, 1)
+    assert ranged.startswith("1: a\u2028b")
+
+
+def test_read_text_crlf_line_count(fm):
+    (fm.root / "crlf2.txt").write_bytes(b"alpha\r\nbeta\r\n")
+    text, total = fm.read_text("crlf2.txt")
+    assert total == 2
+    assert "alpha" in text and "beta" in text

@@ -82,3 +82,23 @@ def test_copilot_json_apply_and_undo(server, page, sandbox_project, screenshots_
         timeout=10_000,
     )
     assert _wait_for_file(app_file, lambda text: text == 'def hello():\n    return "hi"\n')
+
+
+def test_editor_save_and_reload(server, page, sandbox_project):
+    page.goto(server)
+    expect(page.locator("#fileList")).to_contain_text("app.py", timeout=15_000)
+    page.locator(".tree-row", has_text="app.py").first.dblclick()
+    expect(page.locator("#editorModal")).to_be_visible(timeout=10_000)
+    page.fill("#editorCode", 'def hello():\n    return "edited"\n')
+    page.click('button:has-text("Save File")')
+    page.wait_for_function("() => document.getElementById('editorModal').classList.contains('hidden')", timeout=10_000)
+    app_file = sandbox_project / "app.py"
+    assert _wait_for_file(app_file, lambda text: "edited" in text)
+
+
+def test_undo_history_modal_opens(server, page, sandbox_project):
+    page.goto(server)
+    expect(page.locator("#fileList")).to_contain_text("app.py", timeout=15_000)
+    page.click("#undoHistoryBtn")
+    expect(page.locator("#undoModal")).to_be_visible(timeout=10_000)
+    page.locator("#undoModal button", has_text="Close").click()

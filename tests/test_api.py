@@ -109,3 +109,13 @@ def test_protected_paths_rejected(client):
         assert r.status_code == 400
         r2 = client.post("/api/file", json={"path": path, "content": "x"})
         assert r2.status_code == 400
+
+
+def test_undo_list_endpoint(client, fm):
+    # create a batch
+    client.post("/api/file", json={"path": "a.py", "content": "def alpha():\n    return 5\n"})
+    res = client.get("/api/undo/list")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert isinstance(data["batches"], list)
+    assert len(data["batches"]) >= 1

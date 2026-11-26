@@ -31,6 +31,7 @@
         {% endfor %}
       </select>
       <button class="btn ghost" id="undoBtn" onclick="App.undoLast()" title="Undo last applied change">↶ Undo</button>
+  <button class="btn ghost" id="undoHistoryBtn" onclick="App.openUndoModal()" title="Undo history">⟳ History</button>
     </div>
   </header>
 
@@ -96,6 +97,7 @@
           <div class="row wrap">
             <div id="copyButtons" class="row"></div>
             <button id="copyJsonBtn" class="btn warn hidden" onclick="App.toggleJsonPanel()">Copy as JSON</button>
+            <button class="btn ghost" onclick="App.runOps(false)" title="Preview changes without applying">Preview</button>
             <span id="applyMeta" class="muted"></span>
           </div>
         </div>
@@ -121,10 +123,10 @@
     </section>
   </main>
 
-  <div id="browserModal" class="modal hidden">
+  <div id="browserModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="browserTitle">
     <div class="modal-card" style="width: min(640px, 95vw);">
       <div class="card-head">
-        <h3>Advanced Windows Folder Browser</h3>
+          <h3 id="browserTitle">Advanced Windows Folder Browser</h3>
         <button class="btn ghost" onclick="App.closeBrowser()">Close</button>
       </div>
       <div id="driveBar" class="row wrap"></div>
@@ -141,7 +143,7 @@
     </div>
   </div>
 
-  <div id="editorModal" class="modal hidden">
+  <div id="editorModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editorTitle">
     <div class="modal-card editor-modal-card">
       <div class="card-head">
         <div class="row">
@@ -161,7 +163,7 @@
     </div>
   </div>
 
-  <div id="choiceModal" class="modal hidden">
+  <div id="choiceModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="choiceModalTitle">
     <div class="modal-card">
       <div class="card-head">
         <h3 id="choiceModalTitle">Choose an Option</h3>
@@ -172,10 +174,20 @@
     </div>
   </div>
 
-  <div id="errorModal" class="modal hidden">
+  <div id="undoModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="undoModalTitle">
     <div class="modal-card">
       <div class="card-head">
-        <h3>Self-Heal &amp; Error Diagnostic Log</h3>
+        <h3 id="undoModalTitle">Undo History</h3>
+        <button class="btn ghost" onclick="App.closeUndoModal()">Close</button>
+      </div>
+      <div id="undoList" class="json-parts-list"></div>
+    </div>
+  </div>
+
+  <div id="errorModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errorModalTitle">
+    <div class="modal-card">
+      <div class="card-head">
+          <h3 id="errorModalTitle">Self-Heal &amp; Error Diagnostic Log</h3>
         <button class="btn ghost" onclick="App.closeErrorModal()">Close</button>
       </div>
       <div id="errorLogContent" class="diff-container" style="max-height: 320px;"></div>
@@ -192,10 +204,10 @@
     <div class="ctx-item danger" onclick="App.ctxDelete()">🗑️ Delete</div>
   </div>
 
-  <div id="optionsModal" class="modal hidden">
+  <div id="optionsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="optionsTitle">
     <div class="modal-card">
       <div class="card-head">
-        <h3>Prompt &amp; Automation Settings</h3>
+          <h3 id="optionsTitle">Prompt &amp; Automation Settings</h3>
         <button class="btn success" onclick="App.closeOptionsModal()">Done</button>
       </div>
       <div class="col">

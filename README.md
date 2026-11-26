@@ -64,14 +64,29 @@ Windows paths such as `C:\project\file.py:10-20` are supported.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests -q                 # unit tests
+pytest tests -q                 # unit tests (58+)
 python -m playwright install chromium
 pytest e2e -q                   # Playwright end-to-end tests
 ```
+
+Python 3.10+ is required.
 
 E2E screenshots are written to `e2e/screenshots/`.
 
 ## Undo
 
 Every applied batch is stored under `.chatbridge_undo/` (git-ignored). Click
-**↶ Undo** in the top bar to revert the last batch.
+**↶ Undo** in the top bar to revert the last batch, or **⟳ History** to pick a
+specific batch. Undo history is capped at 50 batches / 50 MB total (oldest
+pruned). Undo only restores paths inside the project root.
+
+## Binary files
+
+Files are sniffed for binary content (NUL bytes / invalid UTF-8) in addition to
+their extension; binary files are skipped in the tree and rejected by the editor.
+
+## Security notes
+
+ChatBridge has no authentication. Bind to `127.0.0.1` (the default) and do not
+expose it to a network. `.git/` and `.chatbridge_undo/` are blocked from file
+operations. Payloads are capped at 10 MB.
