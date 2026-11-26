@@ -1,6 +1,7 @@
 import ast
 import re
 from core.file_manager import FileManager
+from core.modes import DEFAULT_MODE, MODES, get_mode
 
 
 class PromptBuilder:
@@ -41,6 +42,11 @@ class PromptBuilder:
         "<<<STATUS: DONE>>>        (if the goal is completely finished)"
     )
 
+    MODE_NOTE_JSON = (
+        "\n\nMODE NOTE (Copilot): This prompt is delivered as ordered JSON parts. "
+        "Process the parts in order and wait for the final part before replying."
+    )
+
     SIG_RE = re.compile(
         r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|function|interface|type|const\s+\w+\s*=\s*(?:async\s*)?\()"
     )
@@ -75,16 +81,69 @@ class PromptBuilder:
         head = content.splitlines()[:40]
         return "\n".join(f"L{i}: {l}" for i, l in enumerate(head, 1)) + "\n... (outline truncated)"
 
+    @staticmethod
+    def _split_on_lines(text: str, chunk_size: int) -> list[str]:
+        """Split text on line boundaries, keeping section headers intact.
+
+        A part never ends in the middle of a line. A ``=== FILE:`` / ``=== OUTLINE:``
+        header is never left orphaned at the end of a part. As a last-resort guard a
+        single line longer than ``chunk_size`` is hard-split.
+        """
+        chunk_size = max(1, chunk_size)
+        chunks: list[str] = []
+        current = ""
+        pending_header = ""
+        for line in text.splitlines(keepends=True):
+            # Move an orphaned header from the end of the previous chunk forward.
+            if pending_header:
+                line = pending_header + line
+                pending_header = ""
+
+            if current and len(current) + len(line) > chunk_size:
+                if line.startswith(("=== FILE:", "=== OUTLINE:")):
+                    pending_header = line
+                    chunks.append(current)
+                    current = ""
+                    continue
+                chunks.append(current)
+                current = ""
+
+            if not current and len(line) > chunk_size:
+                # Single overlong line: hard-split so we always make progress.
+                for i in range(0, len(line), chunk_size):
+                    chunks.append(line[i:i + chunk_size])
+                continue
+
+            current += line
+
+        if pending_header:
+            current += pending_header
+        if current:
+            chunks.append(current)
+        return chunks or [""]
+
     def build(
         self,
         task: str,
         file_specs: list[dict],
         include_tree: bool = True,
-        chunk_size: int = 120000,
+        chunk_size: int | None = None,
         goal_step: int = 1,
         answers: list[dict] | None = None,
         applied_log: list[str] | None = None,
+        mode: str = DEFAULT_MODE,
     ) -> dict:
+        mode_key = (mode or "").strip().lower()
+        if mode_key not in MODES:
+            mode_key = DEFAULT_MODE
+        cfg = get_mode(mode_key)
+
+        if chunk_size is None:
+            effective_chunk = cfg["chunk_chars"]
+        else:
+            effective_chunk = min(int(chunk_size), cfg["chunk_chars"], cfg["max_input_chars"])
+        effective_chunk = max(1000, effective_chunk)
+
         sections: list[str] = []
 
         if include_tree:
@@ -98,14 +157,14 @@ class PromptBuilder:
 
         for spec in file_specs:
             rel = spec["path"]
-            mode = spec.get("mode", "full")
+            spec_mode = spec.get("mode", "full")
             start = spec.get("start")
             end = spec.get("end")
             try:
-                if mode == "range" and (start or end):
+                if spec_mode == "range" and (start or end):
                     text, total = self._fm.read_text(rel, start, end)
                     sections.append(f"=== FILE: {rel} (lines {start or 1}-{end or total} of {total}) ===\n{text}")
-                elif mode == "outline":
+                elif spec_mode == "outline":
                     raw, total = self._fm.read_text(rel)
                     outline = self._extract_outline(rel, raw)
                     sections.append(f"=== OUTLINE: {rel} ({total} lines) ===\n{outline}")
@@ -123,13 +182,17 @@ class PromptBuilder:
             if ans_lines:
                 goal_header += "\n\nUSER ANSWERS:\n" + "\n".join(ans_lines)
 
-        sections.append(f"{goal_header}\n\n{self.FORMAT_RULES}")
+        format_rules = self.FORMAT_RULES
+        if cfg["output_format"] == "json_parts":
+            format_rules += self.MODE_NOTE_JSON
+
+        sections.append(f"{goal_header}\n\n{format_rules}")
         full_prompt = "\n\n".join(sections)
 
-        if len(full_prompt) <= chunk_size:
-            parts = [full_prompt]
+        chunks = self._split_on_lines(full_prompt, effective_chunk)
+        if len(chunks) == 1:
+            parts = chunks
         else:
-            chunks = [full_prompt[i:i + chunk_size] for i in range(0, len(full_prompt), chunk_size)]
             total_parts = len(chunks)
             parts = [
                 f"[PART {idx + 1}/{total_parts} — Wait for remaining parts before replying]\n\n{chunk}"
@@ -138,9 +201,19 @@ class PromptBuilder:
                 for idx, chunk in enumerate(chunks)
             ]
 
+        json_parts = [
+            {"mode": mode_key, "part": idx + 1, "total_parts": len(parts), "prompt": part}
+            for idx, part in enumerate(parts)
+        ]
+
         return {
             "full_prompt": full_prompt,
             "parts": parts,
+            "json_parts": json_parts,
             "chars": len(full_prompt),
             "est_tokens": max(1, len(full_prompt) // 4),
+            "mode": mode_key,
+            "max_input_chars": cfg["max_input_chars"],
+            "output_format": cfg["output_format"],
+            "over_limit": len(full_prompt) > cfg["max_input_chars"],
         }

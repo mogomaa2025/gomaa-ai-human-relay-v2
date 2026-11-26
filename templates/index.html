@@ -23,6 +23,14 @@
     <div class="project-bar">
       <input id="projPath" value="{{ project_root }}" placeholder="C:\path\to\your\project" onchange="App.setProject()">
       <button class="btn ghost" onclick="App.openBrowser()">Browse</button>
+      <select id="modePicker" class="mode-picker" title="AI chat mode (input limit & output format)">
+        {% for key, cfg in modes.items() %}
+        <option value="{{ key }}" data-max="{{ cfg.max_input_chars }}" data-format="{{ cfg.output_format }}" {% if key == default_mode %}selected{% endif %}>
+          {{ cfg.label }}
+        </option>
+        {% endfor %}
+      </select>
+      <button class="btn ghost" id="undoBtn" onclick="App.undoLast()" title="Undo last applied change">↶ Undo</button>
     </div>
   </header>
 
@@ -87,14 +95,24 @@
           <h3>2. AI Response Relay</h3>
           <div class="row wrap">
             <div id="copyButtons" class="row"></div>
+            <button id="copyJsonBtn" class="btn warn hidden" onclick="App.toggleJsonPanel()">Copy as JSON</button>
             <span id="applyMeta" class="muted"></span>
           </div>
         </div>
         <div id="promptPreviewWrap" class="hidden">
           <textarea id="generatedPrompt" class="mono small" readonly></textarea>
         </div>
+        <div id="jsonPartsPanel" class="json-parts hidden">
+          <div class="row wrap">
+            <strong>Copilot JSON parts</strong>
+            <button class="btn primary" id="copyAllJsonBtn" onclick="App.copyAllJsonParts()">Copy all (sequential)</button>
+            <button class="btn ghost" id="downloadJsonBtn" onclick="App.downloadJsonParts()">Download .json</button>
+            <span id="copyAllProgress" class="json-progress muted"></span>
+          </div>
+          <div id="jsonPartsList" class="json-parts-list"></div>
+        </div>
+        <div id="modeLimitWarning" class="mode-warning hidden"></div>
         <div id="pasteInputArea" class="col hidden">
-          <input id="fallbackFile" class="hidden">
           <textarea id="aiResponse" class="mono" placeholder="Waiting for AI response on clipboard..."></textarea>
         </div>
         <div id="questionsOut" class="qa-container"></div>

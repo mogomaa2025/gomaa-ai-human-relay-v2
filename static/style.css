@@ -149,4 +149,13 @@ details[open] > .plan-summary::before { content: "▾ "; }
 .ctx-item:hover { background: #1e293b; color: #38bdf8; }
 .ctx-item.danger:hover { background: rgba(220, 38, 38, 0.2); color: #f87171; }
 
+/* Mode picker, limit warning, JSON export */
+.mode-picker { width: auto; min-width: 104px; padding: 8px 10px; font-size: 13px; }
+.mode-warning { background: rgba(217, 119, 6, 0.18); border: 1px solid var(--warn); color: #fcd34d; padding: 8px 10px; border-radius: 6px; font-size: 12px; }
+.json-parts { display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.json-parts-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.json-part-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 6px 10px; }
+.json-part-meta { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); }
+.json-progress { font-size: 12px; }
+
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .sidebar { height: 320px; } }

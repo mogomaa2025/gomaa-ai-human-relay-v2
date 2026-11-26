@@ -14,6 +14,9 @@ const App = {
   lastFailedErrors: [],
   isProcessing: false,
   ctxPath: "",
+  mode: localStorage.getItem("chatbridge.mode") || "gemini",
+  jsonParts: [],
+  modeMeta: {},
 
   setLedState(healthy, errorSummary = "") {
     const gLed = document.getElementById("greenLed");
@@ -121,6 +124,71 @@ const App = {
       message: msg,
       actions: actions,
     });
+  },
+
+  initModePicker() {
+    const picker = document.getElementById("modePicker");
+    if (!picker) return;
+    if (!picker.querySelector(`option[value="${this.mode}"]`)) {
+      this.mode = picker.options[0] ? picker.options[0].value : "gemini";
+    }
+    picker.value = this.mode;
+    this.updateModeMeta();
+    picker.onchange = () => {
+      this.mode = picker.value;
+      localStorage.setItem("chatbridge.mode", this.mode);
+      this.updateModeMeta();
+      this.renderModeWarning();
+      this.toggleJsonButton();
+    };
+  },
+
+  updateModeMeta() {
+    const picker = document.getElementById("modePicker");
+    const opt = picker && picker.selectedOptions && picker.selectedOptions[0];
+    if (!opt) {
+      this.modeMeta = {};
+      return;
+    }
+    this.modeMeta = {
+      max: parseInt(opt.dataset.max || "0", 10),
+      format: opt.dataset.format || "text",
+      label: opt.textContent.trim(),
+    };
+  },
+
+  getModeLimit() {
+    if (this.modeMeta && this.modeMeta.max) return this.modeMeta.max;
+    const picker = document.getElementById("modePicker");
+    const opt = picker && picker.selectedOptions && picker.selectedOptions[0];
+    return opt ? parseInt(opt.dataset.max || "0", 10) : 0;
+  },
+
+  toggleJsonButton() {
+    const btn = document.getElementById("copyJsonBtn");
+    if (!btn) return;
+    const isJson = (this.modeMeta.format || "text") === "json_parts";
+    btn.classList.toggle("hidden", !isJson);
+    if (!isJson) {
+      const panel = document.getElementById("jsonPartsPanel");
+      if (panel) panel.classList.add("hidden");
+    }
+  },
+
+  renderModeWarning(data) {
+    const box = document.getElementById("modeLimitWarning");
+    if (!box) return;
+    const chars = data ? data.chars : 0;
+    const max = data ? data.max_input_chars : this.getModeLimit();
+    if (data && data.over_limit) {
+      const n = (data.parts || []).length;
+      const label = (data.mode || this.mode || "").toString();
+      box.textContent = `Warning: prompt is ${chars.toLocaleString()} chars — exceeds ${label} limit of ${max.toLocaleString()}. It will be sent in ${n} part(s).`;
+      box.classList.remove("hidden");
+    } else {
+      box.textContent = "";
+      box.classList.add("hidden");
+    }
   },
 
   openOptionsModal() {
@@ -826,12 +894,18 @@ const App = {
         goal_step: this.goalStep,
         answers,
         applied_log: this.appliedLog,
+        mode: this.mode,
       }),
     });
     const data = await res.json();
     document.getElementById("generatedPrompt").value = data.full_prompt;
     document.getElementById("promptMeta").textContent =
-      `${data.chars.toLocaleString()} chars (~${data.est_tokens.toLocaleString()} tokens)`;
+      `${data.chars.toLocaleString()} chars (~${data.est_tokens.toLocaleString()} tokens) · ${data.mode}`;
+
+    this.jsonParts = data.json_parts || [];
+    this.renderModeWarning(data);
+    this.toggleJsonButton();
+    this.renderJsonParts();
 
     const btns = document.getElementById("copyButtons");
     btns.innerHTML = "";
@@ -872,6 +946,95 @@ const App = {
 
     this.setGoalBadge("WAITING REPLY", "active");
     this.setStage("paste");
+  },
+
+  toggleJsonPanel() {
+    const panel = document.getElementById("jsonPartsPanel");
+    if (!panel) return;
+    panel.classList.toggle("hidden");
+  },
+
+  renderJsonParts() {
+    const list = document.getElementById("jsonPartsList");
+    if (!list) return;
+    list.innerHTML = "";
+    const parts = this.jsonParts || [];
+    this.jsonParts.forEach((obj, idx) => {
+      const row = document.createElement("div");
+      row.className = "json-part-row";
+      const meta = document.createElement("span");
+      meta.className = "json-part-meta";
+      meta.textContent = `Part ${obj.part}/${obj.total_parts} · ${obj.prompt.length.toLocaleString()} chars`;
+      const btn = document.createElement("button");
+      btn.className = "btn ghost";
+      btn.textContent = `Copy part ${obj.part}`;
+      btn.onclick = () => this.copyJsonPart(idx);
+      row.append(meta, btn);
+      list.appendChild(row);
+    });
+    const progress = document.getElementById("copyAllProgress");
+    if (progress) progress.textContent = "";
+  },
+
+  async copyJsonPart(index) {
+    const obj = (this.jsonParts || [])[index];
+    if (!obj) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(obj));
+      this.toast(`Copied JSON part ${obj.part}/${obj.total_parts}`, "success");
+    } catch (e) {
+      this.toast("Clipboard permission denied", "red");
+    }
+  },
+
+  async copyAllJsonParts() {
+    const parts = this.jsonParts || [];
+    if (!parts.length) return;
+    const btn = document.getElementById("copyAllJsonBtn");
+    const progress = document.getElementById("copyAllProgress");
+    if (btn) btn.disabled = true;
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        await navigator.clipboard.writeText(JSON.stringify(parts[i]));
+        if (progress) progress.textContent = `Copied ${i + 1}/${parts.length}`;
+        if (i < parts.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+      }
+      this.toast(`Copied all ${parts.length} JSON part(s)`, "success");
+    } catch (e) {
+      this.toast("Clipboard permission denied", "red");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  downloadJsonParts() {
+    const parts = this.jsonParts || [];
+    if (!parts.length) return;
+    const blob = new Blob([JSON.stringify(parts, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chatbridge_prompt_${this.mode}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
+  async undoLast() {
+    try {
+      const res = await fetch("/api/undo", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) return this.toast(data.error || "Nothing to undo.", "red");
+      this.lastFailedErrors = [];
+      this.setLedState(true);
+      await this.loadFiles();
+      this.toast(data.message || "Last change undone.", "success");
+    } catch (e) {
+      this.toast("Undo failed: connection error", "red");
+    }
   },
 
   renderQuestions(questions) {
@@ -952,14 +1115,13 @@ const App = {
     this.isProcessing = true;
     try {
       const text = document.getElementById("aiResponse").value || "";
-      let fallback_path = "";
 
       let res, data;
       try {
         res = await fetch("/api/apply", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, apply, fallback_path }),
+          body: JSON.stringify({ text, apply }),
         });
         data = await res.json();
       } catch (err) {
@@ -1278,9 +1440,9 @@ const App = {
     document.getElementById("task").value = "";
     document.getElementById("aiResponse").value = "";
     document.getElementById("generatedPrompt").value = "";
-    document.getElementById("fallbackFile").value = "";
     this.setLedState(true);
     this.setStage("goal");
+    this.initModePicker();
 
     // Auto-capture clipboard on window focus, visibility change, paste box focus, and background poll
     window.addEventListener("focus", () => this.tryAutoCaptureClipboard());

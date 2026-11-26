@@ -30,6 +30,8 @@ class FileManager:
         ".exe", ".dll", ".pyd", ".so", ".pyc", ".woff", ".woff2", ".ttf",
         ".mp3", ".mp4", ".db", ".sqlite", ".bin",
     }
+    MAX_CONTENT_SCAN_BYTES = 64 * 1024
+    MAX_SCORE_FILE_BYTES = 2_000_000
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         self._root = Path(root_dir or os.getcwd()).resolve()
@@ -107,7 +109,7 @@ class FileManager:
                     continue
                 kept_dirs = []
                 for d in sorted(dirnames):
-                    if not include_ignored and (d in self.IGNORE_DIRS or d == "relative"):
+                    if not include_ignored and d in self.IGNORE_DIRS:
                         continue
                     try:
                         rel_d = (rel_dir / d).as_posix()
@@ -169,6 +171,14 @@ class FileManager:
             return None
         return start, end
 
+    def _read_head(self, rel_path: str, max_bytes: int) -> str:
+        """Read at most ``max_bytes`` from a file to bound memory usage."""
+        p = self.safe_path(rel_path)
+        if not p.is_file():
+            raise FileNotFoundError(f"File not found: {rel_path}")
+        with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+            return fh.read(max_bytes)
+
     def smart_select(self, task: str, max_files: int = 12) -> list[dict]:
         """Selects relevant files & targeted line ranges by matching task keywords against paths, contents, and imports."""
         keywords = [w.lower() for w in re.findall(r"[A-Za-z0-9_./-]{3,}", task)]
@@ -176,33 +186,36 @@ class FileManager:
         terms = [k for k in dict.fromkeys(keywords) if k not in stopwords]
 
         files = self.scan_files(limit=800)
-        scored: list[tuple[int, dict, str]] = []
+        scored: list[tuple[int, dict]] = []
 
         for f in files:
             path_l = f["path"].lower()
             score = 0
-            raw_cache = ""
             for t in terms:
                 if t in path_l:
                     score += 10
-            if terms and f["size"] < 250_000:
+            if terms and f["size"] <= self.MAX_SCORE_FILE_BYTES:
                 try:
-                    raw_cache = self.read_raw(f["path"])
-                    content_l = raw_cache.lower()
+                    content_l = self._read_head(f["path"], self.MAX_CONTENT_SCAN_BYTES).lower()
                     for t in terms[:10]:
                         if t in content_l:
                             score += 2
                 except OSError:
                     pass
             if score > 0:
-                scored.append((score, f, raw_cache))
+                scored.append((score, f))
 
         scored.sort(key=lambda x: (-x[0], x[1]["est_tokens"]))
         top_items = scored[:max_files]
 
         selected_map: dict[str, dict] = {}
         all_paths = {f["path"]: f for f in files}
-        for _, f, raw_cache in top_items:
+        for _, f in top_items:
+            raw_cache = ""
+            try:
+                raw_cache = self._read_head(f["path"], self.MAX_CONTENT_SCAN_BYTES)
+            except OSError:
+                pass
             rng = self._find_best_line_range(raw_cache, terms) if raw_cache else None
             if rng:
                 s, e = rng
@@ -214,7 +227,7 @@ class FileManager:
 
             if f["path"].endswith(".py") and len(selected_map) < max_files:
                 try:
-                    tree = ast.parse(raw_cache or self.read_raw(f["path"]))
+                    tree = ast.parse(raw_cache or "")
                     for node in ast.walk(tree):
                         if isinstance(node, ast.ImportFrom) and node.module:
                             mod_path = node.module.replace(".", "/") + ".py"

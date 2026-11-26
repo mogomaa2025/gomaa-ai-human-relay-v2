@@ -1,9 +1,12 @@
+import argparse
 import os
 from flask import Flask, jsonify, render_template, request
 
 from core.file_manager import FileManager
+from core.modes import DEFAULT_MODE, MODES
 from core.patch_engine import PatchEngine
 from core.prompt_builder import PromptBuilder
+from core.validators import validate_syntax
 
 app = Flask(__name__)
 
@@ -14,7 +17,17 @@ patch_engine = PatchEngine(file_manager)
 
 @app.get("/")
 def index():
-    return render_template("index.html", project_root=str(file_manager.root))
+    return render_template(
+        "index.html",
+        project_root=str(file_manager.root),
+        modes=MODES,
+        default_mode=DEFAULT_MODE,
+    )
+
+
+@app.get("/api/modes")
+def api_modes():
+    return jsonify({"modes": MODES, "default": DEFAULT_MODE})
 
 
 @app.get("/api/files")
@@ -48,14 +61,20 @@ def api_smart_select():
 @app.post("/api/build_prompt")
 def api_build_prompt():
     data = request.json or {}
+    mode = data.get("mode", DEFAULT_MODE)
+    if mode not in MODES:
+        mode = DEFAULT_MODE
+    raw_chunk = data.get("chunk_size")
+    chunk_size = int(raw_chunk) if raw_chunk not in (None, "") else None
     result = prompt_builder.build(
         task=data.get("task", ""),
         file_specs=data.get("files", []),
         include_tree=bool(data.get("include_tree", True)),
-        chunk_size=max(10000, int(data.get("chunk_size", 120000))),
+        chunk_size=chunk_size,
         goal_step=int(data.get("goal_step", 1)),
         answers=data.get("answers", []),
         applied_log=data.get("applied_log", []),
+        mode=mode,
     )
     return jsonify(result)
 
@@ -63,10 +82,7 @@ def api_build_prompt():
 @app.post("/api/apply")
 def api_apply():
     data = request.json or {}
-    parsed = patch_engine.parse_response(
-        response_text=data.get("text", ""),
-        fallback_path=data.get("fallback_path", ""),
-    )
+    parsed = patch_engine.parse_response(response_text=data.get("text", ""))
     ops = parsed["ops"]
     results = patch_engine.execute(ops, apply_changes=bool(data.get("apply", False))) if ops else []
 
@@ -102,6 +118,9 @@ def api_save_file():
     rel_path = data.get("path", "")
     content = data.get("content", "")
     try:
+        syntax_err = validate_syntax(rel_path, content)
+        if syntax_err:
+            return jsonify({"error": syntax_err}), 400
         backups = []
         file_manager.write_with_backup(rel_path, content, backups)
         file_manager.commit_undo_batch(backups)
@@ -215,5 +234,22 @@ def api_undo():
     return jsonify({"message": f"Reverted {count} file(s)."})
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ChatBridge — edit projects via AI chat.")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("CHATBRIDGE_PORT", os.environ.get("PORT", 5000))),
+        help="Port to listen on (default: CHATBRIDGE_PORT/PORT env or 5000).",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("CHATBRIDGE_HOST", "127.0.0.1"),
+        help="Host to bind (default: CHATBRIDGE_HOST env or 127.0.0.1).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    args = _parse_args()
+    app.run(host=args.host, port=args.port, debug=False)

@@ -1,8 +1,7 @@
-import ast
 import difflib
-import json
 import re
 from core.file_manager import BackupEntry, FileManager
+from core.validators import validate_syntax
 
 
 class PatchEngine:
@@ -20,19 +19,38 @@ class PatchEngine:
     ASK_RE = re.compile(r"<<<ASK>>>\r?\n(.*?)\r?\n<<<END>>>", re.DOTALL)
     PLAN_RE = re.compile(r"<<<PLAN>>>\r?\n(.*?)\r?\n<<<END>>>", re.DOTALL)
     STATUS_RE = re.compile(r"<<<STATUS:\s*(NEED_MORE|APPLIED_NEXT|DONE)\s*>>>")
+    NEED_SPEC_RE = re.compile(r"^(?:(\d+)-(\d+)|(full|outline))$", re.IGNORECASE)
 
     def __init__(self, file_manager: FileManager) -> None:
         self._fm = file_manager
 
-    @staticmethod
-    def _strip_wrappers(text: str) -> str:
-        t = text.strip()
-        if t.startswith("<<>>") and t.endswith("<<>>"):
-            t = t[4:-4].strip()
-        m = re.match(r"^```[a-zA-Z0-9_-]*\r?\n(.*)\r?\n```$", t, re.DOTALL)
-        return m.group(1) if m else t
+    @classmethod
+    def _parse_need_line(cls, raw_line: str) -> dict:
+        """Parse one NEED_FILES line.
 
-    def parse_response(self, response_text: str, fallback_path: str = "") -> dict:
+        Supports ``path``, ``path:full``, ``path:outline`` and ``path:10-20``.
+        Windows paths (``C:\\dir\\file.py``) and directories containing hyphens are
+        handled by only treating the trailing segment as a spec when it matches a
+        known spec pattern; otherwise the whole line is the path.
+        """
+        line = raw_line.strip()
+        if ":" in line:
+            head, tail = line.rsplit(":", 1)
+            m = cls.NEED_SPEC_RE.match(tail.strip())
+            if m:
+                path = head.strip()
+                start, end, mode = m.group(1), m.group(2), m.group(3)
+                if mode:
+                    return {"path": path, "mode": mode.lower()}
+                return {
+                    "path": path,
+                    "mode": "range",
+                    "start": int(start),
+                    "end": int(end),
+                }
+        return {"path": line, "mode": "full"}
+
+    def parse_response(self, response_text: str) -> dict:
         ops: list[dict] = []
         for m in self.EDIT_RE.finditer(response_text):
             ops.append({"type": "edit", "path": m.group(1), "old": m.group(2), "new": m.group(3)})
@@ -42,26 +60,9 @@ class PatchEngine:
         need_files: list[dict] = []
         for m in self.NEED_RE.finditer(response_text):
             for raw_line in m.group(1).splitlines():
-                line = raw_line.strip()
-                if not line:
+                if not raw_line.strip():
                     continue
-                if ":" in line:
-                    path_part, spec_part = line.rsplit(":", 1)
-                    spec_part = spec_part.strip().lower()
-                    if "-" in spec_part:
-                        s, e = spec_part.split("-", 1)
-                        need_files.append({
-                            "path": path_part.strip(),
-                            "mode": "range",
-                            "start": int(s) if s.isdigit() else "",
-                            "end": int(e) if e.isdigit() else "",
-                        })
-                    elif spec_part in ("full", "outline"):
-                        need_files.append({"path": path_part.strip(), "mode": spec_part})
-                    else:
-                        need_files.append({"path": line, "mode": "full"})
-                else:
-                    need_files.append({"path": line, "mode": "full"})
+                need_files.append(self._parse_need_line(raw_line))
 
         questions: list[dict] = []
         for m in self.ASK_RE.finditer(response_text):
@@ -93,9 +94,6 @@ class PatchEngine:
         status_match = self.STATUS_RE.search(response_text)
         status_flag = status_match.group(1) if status_match else ""
 
-        # Never treat fallback write as valid unless an explicit file path is selected and active
-        pass
-
         return {
             "ops": ops,
             "need_files": need_files,
@@ -106,18 +104,7 @@ class PatchEngine:
 
     @staticmethod
     def _validate_syntax(rel_path: str, content: str) -> str | None:
-        lower = rel_path.lower()
-        if lower.endswith(".py"):
-            try:
-                ast.parse(content, filename=rel_path)
-            except SyntaxError as e:
-                return f"Python SyntaxError on line {e.lineno}: {e.msg}"
-        elif lower.endswith(".json"):
-            try:
-                json.loads(content)
-            except json.JSONDecodeError as e:
-                return f"JSON SyntaxError on line {e.lineno}, col {e.colno}: {e.msg}"
-        return None
+        return validate_syntax(rel_path, content)
 
     @staticmethod
     def _preserve_newlines(new_text: str, use_crlf: bool) -> str:
