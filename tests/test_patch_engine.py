@@ -191,3 +191,15 @@ def test_execute_rejects_op_without_path(pe, fm):
     results = pe.execute([{"type": "write", "content": "x"}], apply_changes=True)
     assert results[0]["status"] == "error"
     assert "path" in results[0]["message"].lower()
+
+
+def test_fuzzy_line_replace_does_not_split_on_unicode_separator():
+    full = "a\u2028b\nx = 1   \n"
+    result = PatchEngine._fuzzy_line_replace(full, "x = 1   ", "x = 2")
+    assert result == "a\u2028b\nx = 2\n"
+
+
+def test_fuzzy_line_replace_handles_crlf_input():
+    full = "a\r\nx = 1   \r\n"
+    result = PatchEngine._fuzzy_line_replace(full.replace("\r\n", "\n"), "x = 1   ", "x = 2")
+    assert result == "a\nx = 2\n"

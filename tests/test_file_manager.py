@@ -214,3 +214,28 @@ def test_read_text_crlf_line_count(fm):
     text, total = fm.read_text("crlf2.txt")
     assert total == 2
     assert "alpha" in text and "beta" in text
+
+
+def test_undo_last_self_heals_tampered_batch(fm, tmp_path):
+    b1 = []
+    fm.write_with_backup("a.py", "def alpha():\n    return 2\n", b1)
+    fm.commit_undo_batch(b1)
+    b2 = []
+    fm.write_with_backup("a.py", "def alpha():\n    return 3\n", b2)
+    fm.commit_undo_batch(b2)
+
+    batch = sorted((fm.root / ".chatbridge_undo").glob("undo_*.json"))[-1]
+    import json
+    payload = json.loads(batch.read_text(encoding="utf-8"))
+    payload[0]["path"] = str(tmp_path.parent / "outside_escape.txt")
+    batch.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert fm.undo_last() == 0
+    assert not batch.exists()
+    assert fm.undo_last() == 1
+
+
+def test_is_contained_path_resolves_relative_against_root(fm):
+    from pathlib import Path
+    assert fm._is_contained_path(Path("a.py"))
+    assert not fm._is_contained_path(Path("../outside.txt"))

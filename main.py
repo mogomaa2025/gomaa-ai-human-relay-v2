@@ -265,7 +265,11 @@ def api_delete_file():
                 for name in files:
                     os.unlink(os.path.join(root, name))
                 for name in dirs:
-                    os.rmdir(os.path.join(root, name))
+                    dpath = os.path.join(root, name)
+                    if os.path.islink(dpath):
+                        os.unlink(dpath)
+                    else:
+                        os.rmdir(dpath)
             target.rmdir()
         else:
             target.unlink()
@@ -286,6 +290,8 @@ def api_create_item():
     name = name.strip()
     if not name:
         return jsonify({"error": "name must not be empty."}), 400
+    if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
+        return jsonify({"error": "name must not contain path separators."}), 400
     is_dir = bool(data.get("is_dir", False))
     try:
         new_rel = f"{parent_path}/{name}".lstrip("/") if parent_path else name
@@ -332,12 +338,14 @@ def api_paste_item():
             import shutil
             if dst.exists():
                 return jsonify({"error": f"Destination already exists: {dest_rel}"}), 400
-            shutil.copytree(src, dst)
+            shutil.copytree(src, dst, symlinks=True)
             if action == "cut":
                 shutil.rmtree(src)
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             import shutil
+            if dst.exists():
+                return jsonify({"error": f"Destination already exists: {dest_rel}"}), 400
             shutil.copy2(src, dst)
             if action == "cut":
                 src.unlink()

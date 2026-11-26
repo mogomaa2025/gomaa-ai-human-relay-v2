@@ -1,5 +1,18 @@
 # CHANGELOG — ChatBridge (Gomaa Relay)
 
+## Round-3 batch (implemented)
+- Undo self-healing: tampered/malformed batch files are removed automatically so undo is not permanently blocked.
+- `_fuzzy_line_replace` now splits on `\n` only (no Unicode line separators), matching `FileManager._split_lines`.
+- File paste no longer overwrites an existing destination (returns 400).
+- Context-menu New File/Folder resolves the correct parent directory.
+- Editor syntax highlighting now refreshes while typing.
+- Escape key closes the Undo History modal.
+- Remaining `splitlines()` usages (parse blocks, diff, outline, chunker, ignore patterns) unified to `\n`-only splitting.
+- Directory delete/paste handles symlinked entries more robustly.
+- Create-item rejects names containing path separators.
+- Relative undo-batch paths are resolved against the project root for containment checks.
+- Added tests for undo self-healing, paste overwrite, unicode fuzzy split, symlink delete, create-item validation, relative containment.
+
 ## Unreleased (P2–P4 batch)
 - Binary content sniffing in scan/read; expanded binary extensions.
 - Undo retention: keep last 50 batches / 50 MB total.

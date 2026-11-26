@@ -59,14 +59,14 @@ class PatchEngine:
 
         need_files: list[dict] = []
         for m in self.NEED_RE.finditer(response_text):
-            for raw_line in m.group(1).splitlines():
+            for raw_line in FileManager._split_lines(m.group(1)):
                 if not raw_line.strip():
                     continue
                 need_files.append(self._parse_need_line(raw_line))
 
         questions: list[dict] = []
         for m in self.ASK_RE.finditer(response_text):
-            lines = [l.strip() for l in m.group(1).splitlines() if l.strip()]
+            lines = [l.strip() for l in FileManager._split_lines(m.group(1)) if l.strip()]
             if not lines:
                 continue
             q_text = lines[0]
@@ -75,7 +75,7 @@ class PatchEngine:
 
         plan: list[dict] = []
         for m in self.PLAN_RE.finditer(response_text):
-            for raw_line in m.group(1).splitlines():
+            for raw_line in FileManager._split_lines(m.group(1)):
                 if not raw_line.strip():
                     continue
                 indent = len(raw_line) - len(raw_line.lstrip(" \t"))
@@ -114,8 +114,8 @@ class PatchEngine:
     @staticmethod
     def _build_diff_lines(old_text: str, new_text: str, rel_path: str) -> list[dict]:
         raw_diff = difflib.unified_diff(
-            old_text.splitlines(),
-            new_text.splitlines(),
+            FileManager._split_lines(old_text),
+            FileManager._split_lines(new_text),
             fromfile=f"a/{rel_path}",
             tofile=f"b/{rel_path}",
             lineterm="",
@@ -138,8 +138,8 @@ class PatchEngine:
     @staticmethod
     def _fuzzy_line_replace(norm_full: str, norm_old: str, norm_new: str) -> str | None:
         """Fallback matcher ignoring trailing spaces or non-breaking spaces when exact match fails."""
-        full_lines = norm_full.splitlines()
-        old_lines = [l.replace("\u00a0", " ").rstrip() for l in norm_old.splitlines()]
+        full_lines = FileManager._split_lines(norm_full)
+        old_lines = [l.replace("\u00a0", " ").rstrip() for l in FileManager._split_lines(norm_old)]
         if not old_lines:
             return None
         n = len(old_lines)
@@ -150,7 +150,7 @@ class PatchEngine:
                 matches.append(i)
         if len(matches) == 1:
             idx = matches[0]
-            merged = full_lines[:idx] + norm_new.splitlines() + full_lines[idx + n:]
+            merged = full_lines[:idx] + FileManager._split_lines(norm_new) + full_lines[idx + n:]
             trailing = "\n" if norm_full.endswith("\n") else ""
             return "\n".join(merged) + trailing
         return None

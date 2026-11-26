@@ -138,7 +138,7 @@ class FileManager:
         for fname in (".gitignore", ".chatbridgeignore"):
             p = self._root / fname
             if p.is_file():
-                for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                for line in self._split_lines(p.read_text(encoding="utf-8", errors="ignore")):
                     line = line.strip()
                     if line and not line.startswith("#"):
                         patterns.append(line.rstrip("/"))
@@ -396,7 +396,10 @@ class FileManager:
 
     def _is_contained_path(self, candidate: Path) -> bool:
         try:
-            resolved = candidate.resolve()
+            path_obj = Path(candidate)
+            if not path_obj.is_absolute():
+                path_obj = self._root / path_obj
+            resolved = path_obj.resolve()
         except (OSError, RuntimeError):
             return False
         if not resolved.is_relative_to(self._root):
@@ -410,23 +413,35 @@ class FileManager:
         return not any(part in self.PROTECTED_DIRS for part in rel.parts)
 
     def _restore_batch_unlocked(self, batch_path: Path) -> int:
+        def _discard() -> None:
+            try:
+                batch_path.unlink()
+            except OSError:
+                pass
+
         try:
             raw = batch_path.read_text(encoding="utf-8")
             entries = json.loads(raw)
         except (OSError, json.JSONDecodeError, UnicodeError):
+            _discard()
             return 0
         if not isinstance(entries, list) or not entries:
+            _discard()
             return 0
         validated: list[tuple[Path, bool, str]] = []
         for entry in entries:
             if not isinstance(entry, dict):
+                _discard()
                 return 0
             if not all(k in entry for k in ("path", "existed", "content")):
+                _discard()
                 return 0
             if not isinstance(entry["path"], str) or not isinstance(entry["existed"], bool) or not isinstance(entry["content"], str):
+                _discard()
                 return 0
             p = Path(entry["path"])
             if not self._is_contained_path(p):
+                _discard()
                 return 0
             validated.append((p, entry["existed"], entry["content"]))
         try:

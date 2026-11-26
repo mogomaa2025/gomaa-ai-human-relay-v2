@@ -59,7 +59,7 @@ class PromptBuilder:
         if rel_path.endswith(".py"):
             try:
                 tree = ast.parse(content)
-                lines = content.splitlines()
+                lines = self._fm._split_lines(content)
                 out = []
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -73,12 +73,12 @@ class PromptBuilder:
 
         out = [
             f"L{i}: {line.rstrip()}"
-            for i, line in enumerate(content.splitlines(), 1)
+            for i, line in enumerate(self._fm._split_lines(content), 1)
             if self.SIG_RE.match(line)
         ]
         if out:
             return "\n".join(out)
-        head = content.splitlines()[:40]
+        head = self._fm._split_lines(content)[:40]
         return "\n".join(f"L{i}: {l}" for i, l in enumerate(head, 1)) + "\n... (outline truncated)"
 
     @staticmethod
@@ -93,7 +93,14 @@ class PromptBuilder:
         chunks: list[str] = []
         current = ""
         pending_header = ""
-        for line in text.splitlines(keepends=True):
+        if text == "":
+            line_items = []
+        else:
+            _raw = text.split("\n")
+            line_items = [seg + "\n" for seg in _raw[:-1]]
+            if _raw[-1] != "":
+                line_items.append(_raw[-1])
+        for line in line_items:
             # Move an orphaned header from the end of the previous chunk forward.
             if pending_header:
                 line = pending_header + line

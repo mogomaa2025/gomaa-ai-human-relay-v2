@@ -119,3 +119,37 @@ def test_undo_list_endpoint(client, fm):
     data = res.get_json()
     assert isinstance(data["batches"], list)
     assert len(data["batches"]) >= 1
+
+
+def test_paste_file_overwrite_rejected(client, fm):
+    (fm.root / "src.txt").write_text("src", encoding="utf-8")
+    (fm.root / "sub").mkdir()
+    (fm.root / "sub" / "src.txt").write_text("dst", encoding="utf-8")
+    res = client.post(
+        "/api/file/paste",
+        json={"src_path": "src.txt", "dest_dir": "sub", "action": "copy"},
+    )
+    assert res.status_code == 400
+    assert "already exists" in res.get_json()["error"]
+
+
+def test_create_item_rejects_path_separator(client):
+    res = client.post("/api/file/create", json={"parent_path": "", "name": "a/b"})
+    assert res.status_code == 400
+    assert "path separators" in res.get_json()["error"]
+
+
+def test_delete_symlink_does_not_follow_target(client, fm):
+    target = fm.root / "realdir"
+    target.mkdir()
+    (target / "f.txt").write_text("x", encoding="utf-8")
+    link = fm.root / "linkdir"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        import pytest
+        pytest.skip("symlink creation not supported")
+    res = client.post("/api/file/delete", json={"path": "linkdir"})
+    assert res.status_code == 200
+    assert not link.exists()
+    assert not target.exists()

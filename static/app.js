@@ -340,13 +340,20 @@ const App = {
 
   ctxNewFile() {
     const target = this.ctxPath;
-    const parent = target.includes("/") ? target.substring(0, target.lastIndexOf("/")) : "";
-    this.createNewItem(target, false);
+    const isFile = this.files.some((f) => f.path === target);
+    const parent = isFile
+      ? (target.includes("/") ? target.substring(0, target.lastIndexOf("/")) : "")
+      : target;
+    this.createNewItem(parent, false);
   },
 
   ctxNewFolder() {
     const target = this.ctxPath;
-    this.createNewItem(target, true);
+    const isFile = this.files.some((f) => f.path === target);
+    const parent = isFile
+      ? (target.includes("/") ? target.substring(0, target.lastIndexOf("/")) : "")
+      : target;
+    this.createNewItem(parent, true);
   },
 
   ctxCopy() {
@@ -1579,7 +1586,7 @@ const App = {
 
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
-      ["browserModal", "editorModal", "choiceModal", "errorModal", "optionsModal"].forEach((id) => {
+      ["browserModal", "editorModal", "choiceModal", "errorModal", "optionsModal", "undoModal"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.classList.add("hidden");
       });
