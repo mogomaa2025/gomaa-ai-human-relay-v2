@@ -1577,7 +1577,8 @@ const App = {
     aiBox.addEventListener("focus", () => this.tryAutoCaptureClipboard());
      aiBox.addEventListener("paste", () => {
        setTimeout(() => {
-         if (aiBox.value.trim()) this.runOps(true);
+         const v = aiBox.value.trim();
+         if (v && /<<<(EDIT|WRITE|NEED_FILES|ASK|PLAN|STATUS)/.test(v)) this.runOps(true);
        }, 60);
      });
 

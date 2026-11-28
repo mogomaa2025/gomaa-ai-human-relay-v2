@@ -38,6 +38,7 @@ class FileManager:
     }
     MAX_CONTENT_SCAN_BYTES = 64 * 1024
     MAX_SCORE_FILE_BYTES = 2_000_000
+    MAX_READ_BYTES = 5 * 1024 * 1024
     DEFAULT_SCAN_LIMIT = 1500
     TREE_LIMIT = 250
     UNDO_MAX_BATCHES = 50
@@ -170,10 +171,22 @@ class FileManager:
 
     @staticmethod
     def _is_ignored(rel_posix: str, name: str, patterns: list[str]) -> bool:
-        for pat in patterns:
-            if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(rel_posix, pat):
-                return True
-        return False
+        ignored = False
+        for raw in patterns:
+            neg = raw.startswith("!")
+            pat = raw[1:] if neg else raw
+            pat = pat.rstrip("/")
+            if not pat:
+                continue
+            anchored = pat.startswith("/") or ("/" in pat)
+            pat = pat.lstrip("/")
+            if anchored:
+                matched = fnmatch.fnmatch(rel_posix, pat)
+            else:
+                matched = fnmatch.fnmatch(name, pat)
+            if matched:
+                ignored = not neg
+        return ignored
 
     def scan_files(self, limit: int = None, include_ignored: bool = False) -> list[dict]:
         if limit is None:
@@ -338,6 +351,8 @@ class FileManager:
             p = self.safe_path(rel_path)
             if not p.is_file():
                 raise FileNotFoundError(f"File not found: {rel_path}")
+            if p.stat().st_size > self.MAX_READ_BYTES:
+                raise ValueError(f"File too large to read as text: {rel_path}")
             try:
                 with p.open("rb") as bf:
                     sample = bf.read(8192)
@@ -367,6 +382,8 @@ class FileManager:
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
                 fh.write(content)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp_name, target)
         except Exception:
             if os.path.exists(tmp_name):
@@ -380,6 +397,8 @@ class FileManager:
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp_name, target)
         except Exception:
             if os.path.exists(tmp_name):
@@ -563,7 +582,7 @@ class FileManager:
             if entry["existed"]:
                 self._atomic_write(p, entry["content"])
             elif p.exists() or p.is_symlink():
-                p.unlink()
+                self._remove_path(p, True)
         elif kind == "blob":
             self._atomic_write_bytes(p, base64.b64decode(entry["data"]))
         elif kind == "dir":
@@ -606,6 +625,17 @@ class FileManager:
             if not contained:
                 _discard()
                 return 0
+            if normalized["kind"] == "symlink":
+                try:
+                    target_path = Path(normalized["target"])
+                    if not target_path.is_absolute():
+                        target_path = Path(normalized["path"]).parent / target_path
+                    if not self._is_contained_path(target_path.resolve()):
+                        _discard()
+                        return 0
+                except (OSError, RuntimeError, ValueError):
+                    _discard()
+                    return 0
             validated.append(normalized)
 
         restored = 0

@@ -8,16 +8,16 @@ class PatchEngine:
     """Parses edits, file requests, interactive questions, and goal status from AI responses."""
 
     EDIT_RE = re.compile(
-        r'<<<EDIT\s+path=["\']([^"\']+)["\']\s*>>>\s*\r?\n<<<OLD>>>\r?\n(.*?)\r?\n<<<NEW>>>\r?\n(.*?)\r?\n<<<END>>>',
+        r'<<<EDIT\s+path=["\']([^"\']+)["\']\s*>>>\s*\r?\n<<<OLD>>>\r?\n(.*?)\r?\n<<<NEW>>>\r?\n(.*?)(?:\r?\n)?<<<END>>>',
         re.DOTALL,
     )
     WRITE_RE = re.compile(
-        r'<<<WRITE\s+path=["\']([^"\']+)["\']\s*>>>\s*\r?\n(.*?)\r?\n<<<END>>>',
+        r'<<<WRITE\s+path=["\']([^"\']+)["\']\s*>>>\s*\r?\n(.*?)(?:\r?\n)?<<<END>>>',
         re.DOTALL,
     )
-    NEED_RE = re.compile(r"<<<NEED_FILES>>>\r?\n(.*?)\r?\n<<<END>>>", re.DOTALL)
-    ASK_RE = re.compile(r"<<<ASK>>>\r?\n(.*?)\r?\n<<<END>>>", re.DOTALL)
-    PLAN_RE = re.compile(r"<<<PLAN>>>\r?\n(.*?)\r?\n<<<END>>>", re.DOTALL)
+    NEED_RE = re.compile(r"<<<NEED_FILES>>>\r?\n(.*?)(?:\r?\n)?<<<END>>>", re.DOTALL)
+    ASK_RE = re.compile(r"<<<ASK>>>\r?\n(.*?)(?:\r?\n)?<<<END>>>", re.DOTALL)
+    PLAN_RE = re.compile(r"<<<PLAN>>>\r?\n(.*?)(?:\r?\n)?<<<END>>>", re.DOTALL)
     STATUS_RE = re.compile(r"<<<STATUS:\s*(NEED_MORE|APPLIED_NEXT|DONE)\s*>>>")
     NEED_SPEC_RE = re.compile(r"^(?:(\d+)-(\d+)|(full|outline))$", re.IGNORECASE)
 

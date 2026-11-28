@@ -1,5 +1,23 @@
 # CHANGELOG — ChatBridge (Gomaa Relay)
 
+## Round-6 batch (implemented)
+- Cross-filesystem rename now uses `shutil.move` (avoids `EXDEV`).
+- Paste preserves symlinks instead of dereferencing them.
+- Undo restore validates symlink targets stay inside the project root.
+- Undo restore of absent file entries removes any current path type (not just files).
+- Block parser tolerates a missing newline before `<<<END>>>`.
+- Clipboard paste auto-run only triggers on protocol-tagged text.
+- Flask 413/500 responses are JSON instead of HTML.
+- Renaming a directory into its own subtree is rejected up front.
+- Gitignore negation (`!`) and anchored (`/`) patterns are honored.
+- `applied_log` in prompts is capped to the last 20 entries.
+- `smart_select`/`browse` failures return JSON errors.
+- Create-item file writes are atomic.
+- Atomic writes now `fsync` before replace.
+- `/api/file` reads are bounded to 5 MB.
+- Full suite (98) + Playwright e2e (3) pass.
+
+
 ## Round-5 batch (implemented)
 - `safe_path` gained `follow_final` so delete/rename/paste operate on a symlink itself instead of following it (fixes data-loss when deleting a symlinked folder).
 - Undo now supports manual file operations (delete, rename, create, copy/cut paste) via snapshot entries (file/blob/dir/symlink/remove), with binary-safe capture.

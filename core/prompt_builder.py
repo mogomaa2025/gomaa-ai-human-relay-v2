@@ -159,6 +159,8 @@ class PromptBuilder:
             applied_log = []
         else:
             applied_log = [str(item) for item in applied_log]
+            if len(applied_log) > 20:
+                applied_log = applied_log[-20:]
 
         if chunk_size is None:
             effective_chunk = cfg["chunk_chars"]

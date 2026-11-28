@@ -1,5 +1,7 @@
 import argparse
+import errno
 import os
+import shutil
 from flask import Flask, jsonify, render_template, request
 
 from core.file_manager import FileManager
@@ -59,7 +61,10 @@ def api_files():
 @app.get("/api/browse")
 def api_browse():
     path = request.args.get("path", "")
-    return jsonify(file_manager.browse_dirs(path))
+    try:
+        return jsonify(file_manager.browse_dirs(path))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.post("/api/project")
@@ -87,7 +92,10 @@ def api_smart_select():
     task = data.get("task", "")
     if not isinstance(task, str):
         return jsonify({"error": "task must be a string."}), 400
-    return jsonify({"selected": file_manager.smart_select(task)})
+    try:
+        return jsonify({"selected": file_manager.smart_select(task)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.post("/api/build_prompt")
@@ -257,10 +265,29 @@ def api_rename_file():
                 return jsonify({"error": "Cannot rename the project root."}), 400
             if dst.exists() or dst.is_symlink():
                 return jsonify({"error": f"Destination already exists: {new_path}"}), 400
+            if src.is_dir() and not src.is_symlink():
+                try:
+                    if dst == src or dst.is_relative_to(src):
+                        return jsonify({"error": "Cannot rename a directory into itself or its subdirectory."}), 400
+                except ValueError:
+                    pass
             dst.parent.mkdir(parents=True, exist_ok=True)
             undo_entries = file_manager.capture_undo_entries(src)
             undo_entries.append({"kind": "remove", "path": str(dst), "recursive": True})
-            src.rename(dst)
+            try:
+                src.rename(dst)
+            except OSError as e:
+                if e.errno != errno.EXDEV:
+                    raise
+                if src.is_symlink():
+                    os.symlink(os.readlink(src), dst)
+                    src.unlink()
+                elif src.is_dir() and not src.is_symlink():
+                    shutil.copytree(src, dst, symlinks=True)
+                    shutil.rmtree(src)
+                else:
+                    shutil.copy2(src, dst)
+                    src.unlink()
             file_manager.commit_undo_batch(undo_entries)
         return jsonify({"ok": True, "old_path": old_path, "new_path": new_path})
     except Exception as e:
@@ -330,7 +357,7 @@ def api_create_item():
                 target.mkdir(parents=True, exist_ok=True)
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("", encoding="utf-8")
+                file_manager._atomic_write(target, "")
             file_manager.commit_undo_batch([{"kind": "remove", "path": str(target), "recursive": True}])
         return jsonify({"ok": True, "path": new_rel})
     except Exception as e:
@@ -374,7 +401,11 @@ def api_paste_item():
                 undo_entries.append({"kind": "remove", "path": str(dst), "recursive": True})
 
             dst.parent.mkdir(parents=True, exist_ok=True)
-            if src.is_dir() and not src.is_symlink():
+            if src.is_symlink():
+                os.symlink(os.readlink(src), dst)
+                if action == "cut":
+                    src.unlink()
+            elif src.is_dir() and not src.is_symlink():
                 import shutil
                 shutil.copytree(src, dst, symlinks=True)
                 if action == "cut":
@@ -425,6 +456,18 @@ def _parse_args() -> argparse.Namespace:
         help="Host to bind (default: CHATBRIDGE_HOST env or 127.0.0.1).",
     )
     return parser.parse_args()
+
+
+
+
+@app.errorhandler(413)
+def _handle_413(e):
+    return jsonify({"error": "Request payload too large (max 10 MB)."}), 413
+
+
+@app.errorhandler(500)
+def _handle_500(e):
+    return jsonify({"error": "Internal server error."}), 500
 
 
 if __name__ == "__main__":
