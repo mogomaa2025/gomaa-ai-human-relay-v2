@@ -10,7 +10,7 @@
 - Boolean flags (`include_tree`, `is_dir`, `apply`) are parsed strictly instead of `bool("false")`.
 - Prompt builder guards missing `question` keys in answers.
 - Browser directory rows no longer inject folder names via `innerHTML` (XSS fix).
-- Auto-apply on clipboard capture/paste now previews first; an explicit Apply button was added.
+- Auto-apply on clipboard capture/paste applies immediately (preview-first reverted).
 - Tests updated: symlink delete preserves target; full suite (85) + Playwright e2e (3) pass.
 
 ## Round-4 batch (implemented)

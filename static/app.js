@@ -1213,7 +1213,7 @@ const App = {
       if (aiBox.value.trim() === trimmed) return;
        aiBox.value = clipText;
        this.lastCapturedText = trimmed;
-       await this.runOps(false);
+       await this.runOps(true);
     } catch (e) {
       // Clipboard read requires focus/permission
     }
@@ -1577,7 +1577,7 @@ const App = {
     aiBox.addEventListener("focus", () => this.tryAutoCaptureClipboard());
      aiBox.addEventListener("paste", () => {
        setTimeout(() => {
-         if (aiBox.value.trim()) this.runOps(false);
+         if (aiBox.value.trim()) this.runOps(true);
        }, 60);
      });
 
