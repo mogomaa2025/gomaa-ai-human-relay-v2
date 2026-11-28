@@ -158,7 +158,7 @@ class PromptBuilder:
         if not isinstance(applied_log, list):
             applied_log = []
         else:
-            applied_log = [str(item) for item in applied_log]
+            applied_log = [str(item)[:200] for item in applied_log]
             if len(applied_log) > 20:
                 applied_log = applied_log[-20:]
 

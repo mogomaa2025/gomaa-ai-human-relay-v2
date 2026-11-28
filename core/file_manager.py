@@ -89,6 +89,8 @@ class FileManager:
                 raise ValueError("Path must not be empty.")
             if any(ord(ch) < 32 for ch in cleaned):
                 raise ValueError(f"Path must not contain control characters: {rel_path!r}")
+            if any(part == ".." for part in Path(cleaned).parts):
+                raise ValueError(f"Path must not contain traversal components: {rel_path!r}")
             raw_target = self._root / cleaned
             if follow_final:
                 target = raw_target.resolve()
@@ -223,6 +225,8 @@ class FileManager:
                 for fname in sorted(filenames):
                     try:
                         p = Path(dirpath) / fname
+                        if p.is_symlink():
+                            continue
                         if p.suffix.lower() in self.BINARY_EXTS:
                             continue
                         rel = p.relative_to(root).as_posix()
@@ -236,12 +240,11 @@ class FileManager:
                                 continue
                         except OSError:
                             continue
-                        line_count = 0
                         try:
-                            with p.open("r", encoding="utf-8", errors="ignore") as fh:
+                            with p.open("r", encoding="utf-8", errors="strict") as fh:
                                 line_count = sum(1 for _ in fh)
-                        except Exception:
-                            line_count = max(1, size // 30)
+                        except (OSError, UnicodeDecodeError):
+                            continue
 
                         items.append({
                             "path": rel,
@@ -282,7 +285,7 @@ class FileManager:
         p = self.safe_path(rel_path)
         if not p.is_file():
             raise FileNotFoundError(f"File not found: {rel_path}")
-        with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+        with p.open("r", encoding="utf-8", errors="strict", newline="") as fh:
             return fh.read(max_bytes)
 
     def smart_select(self, task: str, max_files: int = 12) -> list[dict]:
@@ -306,7 +309,7 @@ class FileManager:
                     for t in terms[:10]:
                         if t in content_l:
                             score += 2
-                except OSError:
+                except (OSError, UnicodeError):
                     pass
             if score > 0:
                 scored.append((score, f))
@@ -320,7 +323,7 @@ class FileManager:
             raw_cache = ""
             try:
                 raw_cache = self._read_head(f["path"], self.MAX_CONTENT_SCAN_BYTES)
-            except OSError:
+            except (OSError, UnicodeError):
                 pass
             rng = self._find_best_line_range(raw_cache, terms) if raw_cache else None
             if rng:
@@ -360,8 +363,11 @@ class FileManager:
                     raise ValueError(f"Binary file cannot be read as text: {rel_path}")
             except OSError:
                 raise
-            with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
-                return fh.read()
+            try:
+                with p.open("r", encoding="utf-8", errors="strict", newline="") as fh:
+                    return fh.read()
+            except UnicodeDecodeError:
+                raise ValueError(f"File is not valid UTF-8: {rel_path}")
 
     def read_text(self, rel_path: str, start_line: int | None = None, end_line: int | None = None) -> tuple[str, int]:
         with self._lock:
@@ -410,8 +416,8 @@ class FileManager:
             p = self.safe_path(rel_path)
             existed = p.is_file()
             old = self.read_raw(rel_path) if existed else ""
-            backups.append(BackupEntry(path=p, existed=existed, content=old))
             self._atomic_write(p, content)
+            backups.append(BackupEntry(path=p, existed=existed, content=old))
 
     def capture_undo_entries(self, path: Path) -> list[dict]:
         """Snapshot a file/dir/symlink tree for a manual-operation undo batch."""
@@ -515,6 +521,8 @@ class FileManager:
             path_obj = Path(candidate)
             if not path_obj.is_absolute():
                 path_obj = self.root / path_obj
+            if any(part == ".." for part in path_obj.parts):
+                return False
             resolved = path_obj.resolve()
         except (OSError, RuntimeError, ValueError):
             return False
@@ -534,6 +542,8 @@ class FileManager:
             path_obj = Path(candidate)
             if not path_obj.is_absolute():
                 path_obj = self.root / path_obj
+            if any(part == ".." for part in path_obj.parts):
+                return False
             named = path_obj.parent.resolve() / path_obj.name
         except (OSError, RuntimeError, ValueError):
             return False

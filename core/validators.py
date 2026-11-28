@@ -14,7 +14,9 @@ def validate_syntax(rel_path: str, content: str) -> str | None:
             return f"Python SyntaxError on line {e.lineno}: {e.msg}"
     elif lower.endswith(".json"):
         try:
-            json.loads(content)
+            json.loads(content, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("invalid constant")))
         except json.JSONDecodeError as e:
             return f"JSON SyntaxError on line {e.lineno}, col {e.colno}: {e.msg}"
+        except ValueError:
+            return "JSON SyntaxError: invalid numeric constant (NaN or Infinity)"
     return None

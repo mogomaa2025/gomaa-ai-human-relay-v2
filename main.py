@@ -127,7 +127,9 @@ def api_build_prompt():
             return jsonify({"error": "chunk_size must be positive."}), 400
 
     raw_goal = data.get("goal_step", 1)
-    if isinstance(raw_goal, bool) or not isinstance(raw_goal, (int, str)):
+    if isinstance(raw_goal, bool) or not isinstance(raw_goal, (int, str, float)):
+        return jsonify({"error": "goal_step must be an integer."}), 400
+    if isinstance(raw_goal, float) and not raw_goal.is_integer():
         return jsonify({"error": "goal_step must be an integer."}), 400
     try:
         goal_step = int(raw_goal)
@@ -265,12 +267,11 @@ def api_rename_file():
                 return jsonify({"error": "Cannot rename the project root."}), 400
             if dst.exists() or dst.is_symlink():
                 return jsonify({"error": f"Destination already exists: {new_path}"}), 400
-            if src.is_dir() and not src.is_symlink():
-                try:
-                    if dst == src or dst.is_relative_to(src):
-                        return jsonify({"error": "Cannot rename a directory into itself or its subdirectory."}), 400
-                except ValueError:
-                    pass
+            try:
+                if dst == src or dst.is_relative_to(src):
+                    return jsonify({"error": "Cannot rename into itself or its subdirectory."}), 400
+            except ValueError:
+                pass
             dst.parent.mkdir(parents=True, exist_ok=True)
             undo_entries = file_manager.capture_undo_entries(src)
             undo_entries.append({"kind": "remove", "path": str(dst), "recursive": True})
@@ -388,7 +389,7 @@ def api_paste_item():
             dest_rel = f"{dest_dir}/{name}".lstrip("/") if dest_dir else name
             dst = file_manager.safe_path(dest_rel, follow_final=False)
 
-            if dst == src or (src.is_dir() and not src.is_symlink() and dst.is_relative_to(src)):
+            if dst == src or dst.is_relative_to(src):
                 return jsonify({"error": "Cannot paste item into itself or subfolder."}), 400
             if dst.exists() or dst.is_symlink():
                 return jsonify({"error": f"Destination already exists: {dest_rel}"}), 400

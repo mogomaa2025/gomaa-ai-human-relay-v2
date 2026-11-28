@@ -1,5 +1,17 @@
 # CHANGELOG — ChatBridge (Gomaa Relay)
 
+## Round-7 batch (implemented)
+- `safe_path` now rejects `..` traversal components, and undo containment checks reject them too.
+- Patch operations hold the FileManager lock across the whole apply (read, validate, write).
+- Undo backups are recorded only after a successful write, not before.
+- Files with invalid UTF-8 are treated as binary consistently (strict decode, skipped in scans, clear error on read).
+- File scans skip symlinks instead of following them.
+- Rename/paste subtree checks now account for symlinked source and destination paths.
+- JSON syntax validation rejects non-standard values (NaN/Infinity) via `parse_constant`.
+- `/api/build_prompt` accepts integer-valued floats for `goal_step` (like `chunk_size`), and individual `applied_log` entries are capped to 200 characters.
+- Full suite (98) + Playwright e2e (3) pass.
+
+
 ## Round-6 batch (implemented)
 - Cross-filesystem rename now uses `shutil.move` (avoids `EXDEV`).
 - Paste preserves symlinks instead of dereferencing them.
