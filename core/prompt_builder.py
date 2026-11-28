@@ -69,7 +69,7 @@ class PromptBuilder:
                 collected.sort(key=lambda x: x[0])
                 out = [text for _, text in collected]
                 if out:
-                    return "\\n".join(dict.fromkeys(out))
+                    return "\n".join(dict.fromkeys(out))
             except SyntaxError:
                 pass
 
@@ -223,7 +223,7 @@ class PromptBuilder:
         if applied_log:
             goal_header += "\n\nPREVIOUSLY APPLIED:\n" + "\n".join(f"- {item}" for item in applied_log)
         if answers:
-            ans_lines = [f"Q: {a['question']}\nA: {a['answer']}" for a in answers if a.get("answer")]
+            ans_lines = [f"Q: {a.get('question', '')}\nA: {a.get('answer')}" for a in answers if a.get("answer")]
             if ans_lines:
                 goal_header += "\n\nUSER ANSWERS:\n" + "\n".join(ans_lines)
 

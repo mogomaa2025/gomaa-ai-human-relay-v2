@@ -1,5 +1,18 @@
 # CHANGELOG — ChatBridge (Gomaa Relay)
 
+## Round-5 batch (implemented)
+- `safe_path` gained `follow_final` so delete/rename/paste operate on a symlink itself instead of following it (fixes data-loss when deleting a symlinked folder).
+- Undo now supports manual file operations (delete, rename, create, copy/cut paste) via snapshot entries (file/blob/dir/symlink/remove), with binary-safe capture.
+- Partial undo restore now rewrites the batch with the entries that failed instead of discarding the whole batch.
+- Protected dirs (`.git`, `.chatbridge_undo`) are always excluded from scans, even with `include_ignored=true`.
+- Python outline now joins with a real newline instead of a literal `\\n`.
+- Manual destructive file APIs (save/rename/delete/create/paste) now run under the FileManager lock (TOCTOU fix).
+- Boolean flags (`include_tree`, `is_dir`, `apply`) are parsed strictly instead of `bool("false")`.
+- Prompt builder guards missing `question` keys in answers.
+- Browser directory rows no longer inject folder names via `innerHTML` (XSS fix).
+- Auto-apply on clipboard capture/paste now previews first; an explicit Apply button was added.
+- Tests updated: symlink delete preserves target; full suite (85) + Playwright e2e (3) pass.
+
 ## Round-4 batch (implemented)
 - `safe_path` now rejects NUL bytes and control characters in paths.
 - Undo batch is committed via `try/finally` so partial writes remain undoable on fatal errors.

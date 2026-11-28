@@ -480,7 +480,14 @@ const App = {
         row.className = "fitem";
         row.style.padding = "6px 8px";
         row.title = "Click to open, double-click to select as root directly";
-        row.innerHTML = `<span style="flex:1;">📁 ${d.name}</span><span class="muted" style="font-size:11px;">Open &rarr;</span>`;
+        const nameSpan = document.createElement("span");
+        nameSpan.style.flex = "1";
+        nameSpan.textContent = `📁 ${d.name}`;
+        const hint = document.createElement("span");
+        hint.className = "muted";
+        hint.style.fontSize = "11px";
+        hint.textContent = "Open →";
+        row.append(nameSpan, hint);
         row.onclick = () => this.browseTo(d.path);
         row.ondblclick = () => {
           document.getElementById("browsePath").value = d.path;
@@ -1204,9 +1211,9 @@ const App = {
 
       const aiBox = document.getElementById("aiResponse");
       if (aiBox.value.trim() === trimmed) return;
-      aiBox.value = clipText;
-      this.lastCapturedText = trimmed;
-      await this.runOps(true);
+       aiBox.value = clipText;
+       this.lastCapturedText = trimmed;
+       await this.runOps(false);
     } catch (e) {
       // Clipboard read requires focus/permission
     }
@@ -1568,11 +1575,11 @@ const App = {
 
     const aiBox = document.getElementById("aiResponse");
     aiBox.addEventListener("focus", () => this.tryAutoCaptureClipboard());
-    aiBox.addEventListener("paste", () => {
-      setTimeout(() => {
-        if (aiBox.value.trim()) this.runOps(true);
-      }, 60);
-    });
+     aiBox.addEventListener("paste", () => {
+       setTimeout(() => {
+         if (aiBox.value.trim()) this.runOps(false);
+       }, 60);
+     });
 
     const taskBox = document.getElementById("task");
     taskBox.addEventListener("keydown", async (e) => {

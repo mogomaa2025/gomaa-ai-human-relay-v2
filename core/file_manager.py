@@ -1,8 +1,10 @@
 import ast
+import base64
 import fnmatch
 import json
 import os
 import re
+import shutil
 import string
 import tempfile
 import threading
@@ -51,6 +53,11 @@ class FileManager:
             return self._root
 
     @property
+    def lock(self) -> threading.RLock:
+        """Re-entrant lock for callers that need multi-step atomic operations."""
+        return self._lock
+
+    @property
     def _undo_dir(self) -> Path:
         return self.root / ".chatbridge_undo"
 
@@ -64,7 +71,13 @@ class FileManager:
 
     PROTECTED_DIRS = {".chatbridge_undo", ".git"}
 
-    def safe_path(self, rel_path: str) -> Path:
+    def safe_path(self, rel_path: str, *, follow_final: bool = True) -> Path:
+        """Resolve ``rel_path`` inside the project root.
+
+        ``follow_final=False`` resolves the parent directory but keeps the final
+        path component as named. This lets callers delete/rename a symlink
+        itself instead of silently operating on the link's target.
+        """
         with self._lock:
             if not isinstance(rel_path, str):
                 raise ValueError(f"Path must be a string: {rel_path!r}")
@@ -75,7 +88,11 @@ class FileManager:
                 raise ValueError("Path must not be empty.")
             if any(ord(ch) < 32 for ch in cleaned):
                 raise ValueError(f"Path must not contain control characters: {rel_path!r}")
-            target = (self._root / cleaned).resolve()
+            raw_target = self._root / cleaned
+            if follow_final:
+                target = raw_target.resolve()
+            else:
+                target = raw_target.parent.resolve() / raw_target.name
             if not target.is_relative_to(self._root):
                 raise ValueError(f"Access denied outside project root: {rel_path}")
             if target == self._root:
@@ -176,6 +193,8 @@ class FileManager:
                     continue
                 kept_dirs = []
                 for d in sorted(dirnames):
+                    if d in self.PROTECTED_DIRS:
+                        continue
                     if not include_ignored and d in self.IGNORE_DIRS:
                         continue
                     try:
@@ -354,6 +373,19 @@ class FileManager:
                 os.unlink(tmp_name)
             raise
 
+    @staticmethod
+    def _atomic_write_bytes(target: Path, data: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".tmp_cb_", suffix=target.suffix)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp_name, target)
+        except Exception:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+            raise
+
     def write_with_backup(self, rel_path: str, content: str, backups: list[BackupEntry]) -> None:
         with self._lock:
             p = self.safe_path(rel_path)
@@ -362,16 +394,71 @@ class FileManager:
             backups.append(BackupEntry(path=p, existed=existed, content=old))
             self._atomic_write(p, content)
 
-    def commit_undo_batch(self, backups: list[BackupEntry]) -> None:
+    def capture_undo_entries(self, path: Path) -> list[dict]:
+        """Snapshot a file/dir/symlink tree for a manual-operation undo batch."""
+        with self._lock:
+            return self._capture_tree_entries(Path(path))
+
+    @staticmethod
+    def _capture_file_entry(path: Path) -> dict:
+        data = path.read_bytes()
+        try:
+            return {"kind": "file", "path": str(path), "existed": True, "content": data.decode("utf-8")}
+        except UnicodeDecodeError:
+            return {"kind": "blob", "path": str(path), "data": base64.b64encode(data).decode("ascii")}
+
+    def _capture_tree_entries(self, path: Path) -> list[dict]:
+        entries: list[dict] = []
+        if path.is_symlink():
+            entries.append({"kind": "symlink", "path": str(path), "target": os.readlink(path)})
+            return entries
+        if path.is_file():
+            entries.append(self._capture_file_entry(path))
+            return entries
+        if not path.is_dir():
+            raise FileNotFoundError(f"Path not found: {path}")
+        entries.append({"kind": "dir", "path": str(path)})
+        for dirpath, dirnames, filenames in os.walk(path, topdown=True, followlinks=False):
+            base = Path(dirpath)
+            for name in list(dirnames):
+                child = base / name
+                if child.is_symlink():
+                    entries.append({"kind": "symlink", "path": str(child), "target": os.readlink(child)})
+                    dirnames.remove(name)
+                else:
+                    entries.append({"kind": "dir", "path": str(child)})
+            for name in filenames:
+                child = base / name
+                if child.is_symlink():
+                    entries.append({"kind": "symlink", "path": str(child), "target": os.readlink(child)})
+                else:
+                    entries.append(self._capture_file_entry(child))
+        return entries
+
+    @staticmethod
+    def _remove_path(path: Path, recursive: bool) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            if recursive:
+                shutil.rmtree(path)
+            else:
+                path.rmdir()
+
+    def commit_undo_batch(self, backups: list) -> None:
         if not backups:
             return
         with self._lock:
             self._undo_dir.mkdir(parents=True, exist_ok=True)
             batch_file = self._undo_dir / f"undo_{int(time.time() * 1000)}_{uuid.uuid4().hex}.json"
-            payload = [
-                {"path": str(b.path), "existed": b.existed, "content": b.content}
-                for b in backups
-            ]
+            payload = []
+            for b in backups:
+                if isinstance(b, BackupEntry):
+                    payload.append({"path": str(b.path), "existed": b.existed, "content": b.content})
+                elif isinstance(b, dict):
+                    payload.append(b)
+                else:
+                    raise TypeError(f"Invalid undo entry: {b!r}")
             self._atomic_write(batch_file, json.dumps(payload, ensure_ascii=False))
             self._prune_undo_batches()
 
@@ -410,7 +497,7 @@ class FileManager:
             if not path_obj.is_absolute():
                 path_obj = self.root / path_obj
             resolved = path_obj.resolve()
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, ValueError):
             return False
         if not resolved.is_relative_to(self.root):
             return False
@@ -421,6 +508,73 @@ class FileManager:
         except ValueError:
             return False
         return not any(part in self.PROTECTED_DIRS for part in rel.parts)
+
+    def _is_contained_nofollow(self, candidate: Path) -> bool:
+        """Containment check that does not follow the final symlink."""
+        try:
+            path_obj = Path(candidate)
+            if not path_obj.is_absolute():
+                path_obj = self.root / path_obj
+            named = path_obj.parent.resolve() / path_obj.name
+        except (OSError, RuntimeError, ValueError):
+            return False
+        if not named.is_relative_to(self.root):
+            return False
+        if named == self.root:
+            return False
+        try:
+            rel = named.relative_to(self.root)
+        except ValueError:
+            return False
+        return not any(part in self.PROTECTED_DIRS for part in rel.parts)
+
+    def _normalize_undo_entry(self, entry: dict) -> dict | None:
+        if not isinstance(entry, dict):
+            return None
+        kind = entry.get("kind", "file")
+        if kind == "file":
+            if not all(k in entry for k in ("path", "existed", "content")):
+                return None
+            if not isinstance(entry["path"], str) or not isinstance(entry["existed"], bool) or not isinstance(entry["content"], str):
+                return None
+            return {"kind": "file", "path": entry["path"], "existed": entry["existed"], "content": entry["content"]}
+        if kind == "blob":
+            if not isinstance(entry.get("path"), str) or not isinstance(entry.get("data"), str):
+                return None
+            return {"kind": "blob", "path": entry["path"], "data": entry["data"]}
+        if kind == "dir":
+            if not isinstance(entry.get("path"), str):
+                return None
+            return {"kind": "dir", "path": entry["path"]}
+        if kind == "symlink":
+            if not isinstance(entry.get("path"), str) or not isinstance(entry.get("target"), str):
+                return None
+            return {"kind": "symlink", "path": entry["path"], "target": entry["target"]}
+        if kind == "remove":
+            if not isinstance(entry.get("path"), str) or not isinstance(entry.get("recursive"), bool):
+                return None
+            return {"kind": "remove", "path": entry["path"], "recursive": entry["recursive"]}
+        return None
+
+    def _restore_undo_entry(self, entry: dict) -> None:
+        kind = entry["kind"]
+        p = Path(entry["path"])
+        if kind == "file":
+            if entry["existed"]:
+                self._atomic_write(p, entry["content"])
+            elif p.exists() or p.is_symlink():
+                p.unlink()
+        elif kind == "blob":
+            self._atomic_write_bytes(p, base64.b64decode(entry["data"]))
+        elif kind == "dir":
+            p.mkdir(parents=True, exist_ok=True)
+        elif kind == "symlink":
+            if p.exists() or p.is_symlink():
+                p.unlink()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(entry["target"], p)
+        elif kind == "remove":
+            self._remove_path(p, entry["recursive"])
 
     def _restore_batch_unlocked(self, batch_path: Path) -> int:
         def _discard() -> None:
@@ -438,37 +592,43 @@ class FileManager:
         if not isinstance(entries, list) or not entries:
             _discard()
             return 0
-        validated: list[tuple[Path, bool, str]] = []
+        validated: list[dict] = []
         for entry in entries:
-            if not isinstance(entry, dict):
+            normalized = self._normalize_undo_entry(entry)
+            if normalized is None:
                 _discard()
                 return 0
-            if not all(k in entry for k in ("path", "existed", "content")):
+            p = Path(normalized["path"])
+            if normalized["kind"] in ("symlink", "remove"):
+                contained = self._is_contained_nofollow(p)
+            else:
+                contained = self._is_contained_path(p)
+            if not contained:
                 _discard()
                 return 0
-            if not isinstance(entry["path"], str) or not isinstance(entry["existed"], bool) or not isinstance(entry["content"], str):
-                _discard()
-                return 0
-            p = Path(entry["path"])
-            if not self._is_contained_path(p):
-                _discard()
-                return 0
-            validated.append((p, entry["existed"], entry["content"]))
+            validated.append(normalized)
+
         restored = 0
-        for p, existed, content in reversed(validated):
+        remaining: list[dict] = []
+        for entry in reversed(validated):
             try:
-                if existed:
-                    self._atomic_write(p, content)
-                elif p.exists():
-                    p.unlink()
+                self._restore_undo_entry(entry)
                 restored += 1
             except Exception:
-                continue
+                remaining.append(entry)
+
         if restored > 0:
-            try:
-                batch_path.unlink()
-            except OSError:
-                pass
+            if remaining:
+                remaining.reverse()
+                try:
+                    self._atomic_write(batch_path, json.dumps(remaining, ensure_ascii=False))
+                except OSError:
+                    pass
+            else:
+                try:
+                    batch_path.unlink()
+                except OSError:
+                    pass
         return restored
 
     def undo_last(self) -> int:

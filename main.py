@@ -19,6 +19,18 @@ def _json_body() -> dict | None:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def _as_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(value, (int, float)):
+        return value != 0
+    return default
+
+
 prompt_builder = PromptBuilder(file_manager)
 patch_engine = PatchEngine(file_manager)
 
@@ -128,7 +140,7 @@ def api_build_prompt():
     if not isinstance(applied_log, list):
         return jsonify({"error": "applied_log must be a list."}), 400
 
-    include_tree = bool(data.get("include_tree", True))
+    include_tree = _as_bool(data.get("include_tree", True), True)
 
     try:
         result = prompt_builder.build(
@@ -214,12 +226,13 @@ def api_save_file():
     if not isinstance(content, str):
         return jsonify({"error": "content must be a string."}), 400
     try:
-        syntax_err = validate_syntax(rel_path, content)
-        if syntax_err:
-            return jsonify({"error": syntax_err}), 400
-        backups = []
-        file_manager.write_with_backup(rel_path, content, backups)
-        file_manager.commit_undo_batch(backups)
+        with file_manager.lock:
+            syntax_err = validate_syntax(rel_path, content)
+            if syntax_err:
+                return jsonify({"error": syntax_err}), 400
+            backups = []
+            file_manager.write_with_backup(rel_path, content, backups)
+            file_manager.commit_undo_batch(backups)
         return jsonify({"ok": True, "path": rel_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -235,16 +248,20 @@ def api_rename_file():
     if not isinstance(old_path, str) or not isinstance(new_path, str):
         return jsonify({"error": "old_path and new_path must be strings."}), 400
     try:
-        src = file_manager.safe_path(old_path)
-        dst = file_manager.safe_path(new_path)
-        if not src.exists():
-            return jsonify({"error": f"Path not found: {old_path}"}), 400
-        if src == file_manager.root or dst == file_manager.root:
-            return jsonify({"error": "Cannot rename the project root."}), 400
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists():
-            return jsonify({"error": f"Destination already exists: {new_path}"}), 400
-        src.rename(dst)
+        with file_manager.lock:
+            src = file_manager.safe_path(old_path, follow_final=False)
+            dst = file_manager.safe_path(new_path, follow_final=False)
+            if not (src.exists() or src.is_symlink()):
+                return jsonify({"error": f"Path not found: {old_path}"}), 400
+            if src == file_manager.root or dst == file_manager.root:
+                return jsonify({"error": "Cannot rename the project root."}), 400
+            if dst.exists() or dst.is_symlink():
+                return jsonify({"error": f"Destination already exists: {new_path}"}), 400
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            undo_entries = file_manager.capture_undo_entries(src)
+            undo_entries.append({"kind": "remove", "path": str(dst), "recursive": True})
+            src.rename(dst)
+            file_manager.commit_undo_batch(undo_entries)
         return jsonify({"ok": True, "old_path": old_path, "new_path": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -259,24 +276,28 @@ def api_delete_file():
     if not isinstance(rel_path, str):
         return jsonify({"error": "path must be a string."}), 400
     try:
-        target = file_manager.safe_path(rel_path)
-        if target == file_manager.root:
-            return jsonify({"error": "Cannot delete the project root."}), 400
-        if not target.exists():
-            return jsonify({"error": f"Path not found: {rel_path}"}), 400
-        if target.is_dir() and not target.is_symlink():
-            for root, dirs, files in os.walk(target, topdown=False):
-                for name in files:
-                    os.unlink(os.path.join(root, name))
-                for name in dirs:
-                    dpath = os.path.join(root, name)
-                    if os.path.islink(dpath):
-                        os.unlink(dpath)
-                    else:
-                        os.rmdir(dpath)
-            target.rmdir()
-        else:
-            target.unlink()
+        with file_manager.lock:
+            target = file_manager.safe_path(rel_path, follow_final=False)
+            if target == file_manager.root:
+                return jsonify({"error": "Cannot delete the project root."}), 400
+            if not (target.exists() or target.is_symlink()):
+                return jsonify({"error": f"Path not found: {rel_path}"}), 400
+            is_dir = target.is_dir() and not target.is_symlink()
+            undo_entries = file_manager.capture_undo_entries(target)
+            if is_dir:
+                for root, dirs, files in os.walk(target, topdown=False):
+                    for name in files:
+                        os.unlink(os.path.join(root, name))
+                    for name in dirs:
+                        dpath = os.path.join(root, name)
+                        if os.path.islink(dpath):
+                            os.unlink(dpath)
+                        else:
+                            os.rmdir(dpath)
+                target.rmdir()
+            else:
+                target.unlink()
+            file_manager.commit_undo_batch(undo_entries)
         return jsonify({"ok": True, "path": rel_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -296,19 +317,21 @@ def api_create_item():
         return jsonify({"error": "name must not be empty."}), 400
     if name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
         return jsonify({"error": "name must not contain path separators."}), 400
-    is_dir = bool(data.get("is_dir", False))
+    is_dir = _as_bool(data.get("is_dir", False), False)
     try:
-        new_rel = f"{parent_path}/{name}".lstrip("/") if parent_path else name
-        target = file_manager.safe_path(new_rel)
-        if target == file_manager.root:
-            return jsonify({"error": "Cannot create the project root."}), 400
-        if target.exists():
-            return jsonify({"error": f"Path already exists: {new_rel}"}), 400
-        if is_dir:
-            target.mkdir(parents=True, exist_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("", encoding="utf-8")
+        with file_manager.lock:
+            new_rel = f"{parent_path}/{name}".lstrip("/") if parent_path else name
+            target = file_manager.safe_path(new_rel)
+            if target == file_manager.root:
+                return jsonify({"error": "Cannot create the project root."}), 400
+            if target.exists() or target.is_symlink():
+                return jsonify({"error": f"Path already exists: {new_rel}"}), 400
+            if is_dir:
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("", encoding="utf-8")
+            file_manager.commit_undo_batch([{"kind": "remove", "path": str(target), "recursive": True}])
         return jsonify({"ok": True, "path": new_rel})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -327,36 +350,42 @@ def api_paste_item():
     if action not in ("copy", "cut"):
         return jsonify({"error": "action must be 'copy' or 'cut'."}), 400
     try:
-        src = file_manager.safe_path(src_path)
-        if not src.exists():
-            return jsonify({"error": f"Source not found: {src_path}"}), 400
-        if src == file_manager.root:
-            return jsonify({"error": "Cannot paste the project root."}), 400
+        with file_manager.lock:
+            src = file_manager.safe_path(src_path, follow_final=False)
+            if not (src.exists() or src.is_symlink()):
+                return jsonify({"error": f"Source not found: {src_path}"}), 400
+            if src == file_manager.root:
+                return jsonify({"error": "Cannot paste the project root."}), 400
 
-        name = src.name
-        dest_rel = f"{dest_dir}/{name}".lstrip("/") if dest_dir else name
-        dst = file_manager.safe_path(dest_rel)
+            name = src.name
+            dest_rel = f"{dest_dir}/{name}".lstrip("/") if dest_dir else name
+            dst = file_manager.safe_path(dest_rel, follow_final=False)
 
-        if dst == src or dst.is_relative_to(src):
-            return jsonify({"error": "Cannot paste item into itself or subfolder."}), 400
-
-        if src.is_dir() and not src.is_symlink():
-            import shutil
-            if dst.exists():
+            if dst == src or (src.is_dir() and not src.is_symlink() and dst.is_relative_to(src)):
+                return jsonify({"error": "Cannot paste item into itself or subfolder."}), 400
+            if dst.exists() or dst.is_symlink():
                 return jsonify({"error": f"Destination already exists: {dest_rel}"}), 400
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(src, dst, symlinks=True)
-            if action == "cut":
-                shutil.rmtree(src)
-        else:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-            if dst.exists():
-                return jsonify({"error": f"Destination already exists: {dest_rel}"}), 400
-            shutil.copy2(src, dst)
-            if action == "cut":
-                src.unlink()
 
+            undo_entries: list = []
+            if action == "cut":
+                undo_entries.extend(file_manager.capture_undo_entries(src))
+                undo_entries.append({"kind": "remove", "path": str(dst), "recursive": True})
+            else:
+                undo_entries.append({"kind": "remove", "path": str(dst), "recursive": True})
+
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir() and not src.is_symlink():
+                import shutil
+                shutil.copytree(src, dst, symlinks=True)
+                if action == "cut":
+                    shutil.rmtree(src)
+            else:
+                import shutil
+                shutil.copy2(src, dst)
+                if action == "cut":
+                    src.unlink()
+
+            file_manager.commit_undo_batch(undo_entries)
         return jsonify({"ok": True, "path": dest_rel})
     except Exception as e:
         return jsonify({"error": str(e)}), 400

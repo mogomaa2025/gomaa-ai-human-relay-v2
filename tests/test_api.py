@@ -152,4 +152,5 @@ def test_delete_symlink_does_not_follow_target(client, fm):
     res = client.post("/api/file/delete", json={"path": "linkdir"})
     assert res.status_code == 200
     assert not link.exists()
-    assert not target.exists()
+    assert target.exists()
+    assert (target / "f.txt").is_file()
